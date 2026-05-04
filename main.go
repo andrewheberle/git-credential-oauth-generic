@@ -35,17 +35,14 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
+
+	"github.com/zalando/go-keyring"
 )
 
 var (
 	verbose bool
 	version = "dev"
-)
-
-const (
-	keyringService = "git-credential-oauth-generic"
 )
 
 func getVersion() string {
@@ -306,6 +303,26 @@ func openBrowser(rawURL string) {
 	}
 }
 
+const (
+	keyringService = "git-credential-oauth-generic"
+)
+
+// getClientSecret retrieves the client secret from the OS keyring for the
+// given resource URL. Returns empty string if not found.
+func getClientSecret(resourceURL string) string {
+	secret, err := keyring.Get(keyringService, resourceURL)
+	if err != nil {
+		return ""
+	}
+	return secret
+}
+
+// setClientSecret stores the client secret in the OS keyring for the given
+// resource URL.
+func setClientSecret(resourceURL, secret string) error {
+	return keyring.Set(keyringService, resourceURL, secret)
+}
+
 func main() {
 	ctx := context.Background()
 	flag.BoolVar(&verbose, "verbose", false, "log debug information to stderr")
@@ -412,10 +429,9 @@ func main() {
 	// --- Step 3: attempt token refresh if we have a refresh token ---
 	if pairs["oauth_refresh_token"] != "" {
 		refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-		refreshClientSecret, _ := keyring.Get(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL))
 		c := oauth2.Config{
 			ClientID:     refreshClientID,
-			ClientSecret: refreshClientSecret,
+			ClientSecret: getClientSecret(resourceURL),
 			Endpoint: oauth2.Endpoint{
 				TokenURL:  asMeta.TokenEndpoint,
 				AuthStyle: oauth2.AuthStyleInHeader,
@@ -462,18 +478,16 @@ func main() {
 				fmt.Fprintf(os.Stderr, "warning: could not save client_id to git config: %v\n", err)
 			}
 			if clientSecret != "" {
-				if err := keyring.Set(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL), clientSecret); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to git config: %v\n", err)
+				if err := setClientSecret(resourceURL, clientSecret); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to keyring: %v\n", err)
 				}
 			}
 		}
 
 		// --- Step 5: PKCE authorization code flow with RFC 8707 resource parameter ---
-		// Read client_secret from git config (may have been stored during registration).
-		clientSecret, _ := keyring.Get(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL))
 		c := oauth2.Config{
 			ClientID:     clientID,
-			ClientSecret: clientSecret,
+			ClientSecret: getClientSecret(resourceURL),
 			Endpoint: oauth2.Endpoint{
 				AuthURL:   asMeta.AuthorizationEndpoint,
 				TokenURL:  asMeta.TokenEndpoint,
