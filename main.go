@@ -35,12 +35,17 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 )
 
 var (
 	verbose bool
 	version = "dev"
+)
+
+const (
+	keyringService = "git-credential-oauth-generic"
 )
 
 func getVersion() string {
@@ -407,7 +412,7 @@ func main() {
 	// --- Step 3: attempt token refresh if we have a refresh token ---
 	if pairs["oauth_refresh_token"] != "" {
 		refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-		refreshClientSecret, _ := gitConfig("--get-urlmatch", "credential.oauthClientSecret", resourceURL)
+		refreshClientSecret, _ := keyring.Get(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL))
 		c := oauth2.Config{
 			ClientID:     refreshClientID,
 			ClientSecret: refreshClientSecret,
@@ -457,7 +462,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "warning: could not save client_id to git config: %v\n", err)
 			}
 			if clientSecret != "" {
-				if err := setGitConfig("--global", fmt.Sprintf("credential.%s.oauthClientSecret", resourceURL), clientSecret); err != nil {
+				if err := keyring.Set(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL), clientSecret); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to git config: %v\n", err)
 				}
 			}
@@ -465,7 +470,7 @@ func main() {
 
 		// --- Step 5: PKCE authorization code flow with RFC 8707 resource parameter ---
 		// Read client_secret from git config (may have been stored during registration).
-		clientSecret, _ := gitConfig("--get-urlmatch", "credential.oauthClientSecret", resourceURL)
+		clientSecret, _ := keyring.Get(keyringService, fmt.Sprintf("%s.oauthClientSecret", resourceURL))
 		c := oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
