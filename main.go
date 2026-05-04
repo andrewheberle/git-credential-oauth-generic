@@ -91,7 +91,8 @@ type authServerMetadata struct {
 
 // dynamicClientResponse is the RFC 7591 registration response.
 type dynamicClientResponse struct {
-	ClientID string `json:"client_id"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
 }
 
 // fetchJSON fetches a URL and decodes the JSON response into dst.
@@ -158,7 +159,7 @@ func discoverAS(ctx context.Context, resourceURL string) (*authServerMetadata, e
 // registerClient performs RFC 7591 dynamic client registration against the
 // given registration endpoint, requesting a localhost redirect URI on the
 // given port.
-func registerClient(ctx context.Context, registrationEndpoint string, callbackPort int) (string, error) {
+func registerClient(ctx context.Context, registrationEndpoint string, callbackPort int) (clientID, clientSecret string, err error) {
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", callbackPort)
 	body, err := json.Marshal(map[string]any{
 		"redirect_uris": []string{redirectURI},
@@ -166,31 +167,31 @@ func registerClient(ctx context.Context, registrationEndpoint string, callbackPo
 		"grant_types":   []string{"authorization_code", "refresh_token"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("encoding registration request: %w", err)
+		return "", "", fmt.Errorf("encoding registration request: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, registrationEndpoint, strings.NewReader(string(body)))
 	if err != nil {
-		return "", fmt.Errorf("building registration request: %w", err)
+		return "", "", fmt.Errorf("building registration request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("registration request: %w", err)
+		return "", "", fmt.Errorf("registration request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("registration failed (status %d): %s", resp.StatusCode, string(b))
+		return "", "", fmt.Errorf("registration failed (status %d): %s", resp.StatusCode, string(b))
 	}
 	var result dynamicClientResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decoding registration response: %w", err)
+		return "", "", fmt.Errorf("decoding registration response: %w", err)
 	}
 	if result.ClientID == "" {
-		return "", fmt.Errorf("registration response missing client_id")
+		return "", "", fmt.Errorf("registration response missing client_id")
 	}
-	return result.ClientID, nil
+	return result.ClientID, result.ClientSecret, nil
 }
 
 // gitConfig runs "git config <args>" and returns trimmed output.
@@ -405,15 +406,16 @@ func main() {
 
 	// --- Step 3: attempt token refresh if we have a refresh token ---
 	if pairs["oauth_refresh_token"] != "" {
+		refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
+		refreshClientSecret, _ := gitConfig("--get-urlmatch", "credential.oauthClientSecret", resourceURL)
 		c := oauth2.Config{
+			ClientID:     refreshClientID,
+			ClientSecret: refreshClientSecret,
 			Endpoint: oauth2.Endpoint{
 				TokenURL:  asMeta.TokenEndpoint,
 				AuthStyle: oauth2.AuthStyleInHeader,
 			},
 		}
-		// client_id is needed for refresh; read from git config.
-		clientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-		c.ClientID = clientID
 
 		ts := c.TokenSource(ctx, &oauth2.Token{
 			RefreshToken: pairs["oauth_refresh_token"],
@@ -442,24 +444,31 @@ func main() {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "no client_id cached, registering with %s\n", asMeta.RegistrationEndpoint)
 			}
-			clientID, err = registerClient(ctx, asMeta.RegistrationEndpoint, *callbackPort)
+			var clientSecret string
+			clientID, clientSecret, err = registerClient(ctx, asMeta.RegistrationEndpoint, *callbackPort)
 			if err != nil {
 				log.Fatalf("dynamic client registration failed: %v\n", err)
 			}
 			if verbose {
 				fmt.Fprintf(os.Stderr, "registered client_id: %s\n", clientID)
 			}
-			// Persist client_id in git config so it survives across invocations.
-			configKey := fmt.Sprintf("credential.%s.oauthClientId", resourceURL)
-			if err := setGitConfig("--global", configKey, clientID); err != nil {
-				// Non-fatal: warn and continue; next run will register again.
+			// Persist client_id and client_secret in git config so they survive across invocations.
+			if err := setGitConfig("--global", fmt.Sprintf("credential.%s.oauthClientId", resourceURL), clientID); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save client_id to git config: %v\n", err)
+			}
+			if clientSecret != "" {
+				if err := setGitConfig("--global", fmt.Sprintf("credential.%s.oauthClientSecret", resourceURL), clientSecret); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to git config: %v\n", err)
+				}
 			}
 		}
 
 		// --- Step 5: PKCE authorization code flow with RFC 8707 resource parameter ---
+		// Read client_secret from git config (may have been stored during registration).
+		clientSecret, _ := gitConfig("--get-urlmatch", "credential.oauthClientSecret", resourceURL)
 		c := oauth2.Config{
-			ClientID: clientID,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:   asMeta.AuthorizationEndpoint,
 				TokenURL:  asMeta.TokenEndpoint,
