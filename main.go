@@ -507,18 +507,30 @@ func main() {
 	}
 
 	// --- Step 6: output credentials for Git ---
-	// Announce authtype capability first as required by the protocol.
-	fmt.Println("capability[]=authtype")
+	// If Git negotiated authtype capability (Git 2.45+), use the Bearer token
+	// output format. Otherwise fall back to username/password for older Git.
+	authtypeSupported := pairs["capability[]"] == "authtype"
+	if verbose {
+		fmt.Fprintf(os.Stderr, "authtype capability supported by git: %v\n", authtypeSupported)
+	}
 
-	output := map[string]string{
-		"authtype":   "Bearer",
-		"credential": token.AccessToken,
-	}
-	if !token.Expiry.IsZero() {
-		output["password_expiry_utc"] = fmt.Sprintf("%d", token.Expiry.UTC().Unix())
-	}
-	if token.RefreshToken != "" {
-		output["oauth_refresh_token"] = token.RefreshToken
+	output := make(map[string]string)
+	if authtypeSupported {
+		output["authtype"] = "Bearer"
+		output["credential"] = token.AccessToken
+		if !token.Expiry.IsZero() {
+			output["password_expiry_utc"] = fmt.Sprintf("%d", token.Expiry.UTC().Unix())
+		}
+		if token.RefreshToken != "" {
+			output["oauth_refresh_token"] = token.RefreshToken
+		}
+	} else {
+		// Older Git: send token as password with a dummy username.
+		output["username"] = "oauth2"
+		output["password"] = token.AccessToken
+		if !token.Expiry.IsZero() {
+			output["password_expiry_utc"] = fmt.Sprintf("%d", token.Expiry.UTC().Unix())
+		}
 	}
 	if verbose {
 		fmt.Fprintln(os.Stderr, "output:", output)
