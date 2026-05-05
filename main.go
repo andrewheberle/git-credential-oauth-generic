@@ -507,9 +507,13 @@ func main() {
 	}
 
 	// --- Step 6: output credentials for Git ---
-	// If Git negotiated authtype capability (Git 2.45+), use the Bearer token
-	// output format. Otherwise fall back to username/password for older Git.
-	authtypeSupported := pairs["capability[]"] == "authtype"
+	// "A capability[] directive must precede any value depending on it and these
+	// directives should be the first item announced in the protocol."
+	// https://git-scm.com/docs/git-credential
+	fmt.Println("capability[]=authtype")
+
+	// capability[] in the input may contain multiple newline-separated values.
+	authtypeSupported := strings.Contains(pairs["capability[]"], "authtype")
 	if verbose {
 		fmt.Fprintf(os.Stderr, "authtype capability supported by git: %v\n", authtypeSupported)
 	}
