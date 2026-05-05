@@ -8,8 +8,8 @@ standard RFCs, with no hardcoded provider knowledge:
 - **RFC 7591** — Dynamic Client Registration
 - **RFC 8707** — Resource Indicators (PKCE authorization code flow)
 
-Originally developed for use with Cloudflare Access Managed OAuth, but works
-with any authorization server implementing the above RFCs.
+Originally developed for use with Cloudflare Access Managed OAuth, but should
+work with any authorization server implementing the above RFCs.
 
 ## Requirements
 
