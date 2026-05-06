@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -210,6 +212,11 @@ func setGitConfig(args ...string) error {
 // listening for the callback on the given port. The resource parameter (RFC
 // 8707) is appended to the authorization URL.
 func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callbackPort int) (*oauth2.Token, error) {
+	// Create a derived context with a 5-minute timeout to allow for
+	// browser profile switching, URL copy-pasting, or MFA challenges.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	state := oauth2.GenerateVerifier()
 	verifier := oauth2.GenerateVerifier()
 
@@ -221,6 +228,9 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 	}
 
 	queries := make(chan url.Values, 1)
+	// ready chan ensures the server loop has started before we trigger the browser.
+	ready := make(chan struct{})
+
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			queries <- r.URL.Query()
@@ -232,7 +242,16 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 				`</body></html>`, getVersion())
 		}),
 	}
-	go srv.Serve(l)
+
+	go func() {
+		close(ready)
+		if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("local server error: %v", err)
+		}
+	}()
+
+	// Wait for the server goroutine to be scheduled.
+	<-ready
 	defer srv.Close()
 
 	// Build the authorization URL with PKCE and RFC 8707 resource parameter.
@@ -242,29 +261,40 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		oauth2.SetAuthURLParam("resource", resourceURL),
 	)
 
-	fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n%s\n", authURL)
+	// Inform the user and provide the URL for manual entry if the browser fails.
+	fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n")
+	fmt.Fprintf(os.Stderr, "If required you may copy and paste this URL into your browser:\n\n%s\n\n", authURL)
 	openBrowser(authURL)
 
-	query := <-queries
-	if query.Get("state") != state {
-		return nil, fmt.Errorf("state mismatch in callback")
-	}
-	if errParam := query.Get("error"); errParam != "" {
-		return nil, fmt.Errorf("authorization error: %s: %s", errParam, query.Get("error_description"))
-	}
-	code := query.Get("code")
+	// Wait for the callback or the 5-minute timeout.
+	select {
+	case query := <-queries:
+		if query.Get("state") != state {
+			return nil, fmt.Errorf("state mismatch in callback")
+		}
+		if errParam := query.Get("error"); errParam != "" {
+			return nil, fmt.Errorf("authorization error: %s: %s", errParam, query.Get("error_description"))
+		}
+		code := query.Get("code")
 
-	// Exchange code for token, again including the resource parameter (RFC 8707).
-	token, err := c.Exchange(
-		ctx,
-		code,
-		oauth2.VerifierOption(verifier),
-		oauth2.SetAuthURLParam("resource", resourceURL),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("token exchange: %w", err)
+		// Exchange code for token, again including the resource parameter (RFC 8707).
+		token, err := c.Exchange(
+			ctx,
+			code,
+			oauth2.VerifierOption(verifier),
+			oauth2.SetAuthURLParam("resource", resourceURL),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("token exchange: %w", err)
+		}
+		return token, nil
+
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("authentication timed out after 5 minutes")
+		}
+		return nil, ctx.Err()
 	}
-	return token, nil
 }
 
 // openBrowser attempts to open the given URL in the system browser.
