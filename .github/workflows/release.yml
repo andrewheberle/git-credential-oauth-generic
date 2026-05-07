@@ -9,7 +9,7 @@ permissions: {}
 
 jobs:
   client:
-    name: Build Client with GoReleaser
+    name: Build and Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
