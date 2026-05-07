@@ -1,3 +1,5 @@
+github.com/andrewheberle/opener v1.0.2 h1:q/tiHleJ2LaZo5VB+faeIylQedEIbT/u7e6iRnIwAW0=
+github.com/andrewheberle/opener v1.0.2/go.mod h1:9BW68Czxp8UU5/wxA1NdRUW8NdJTnFS1XSQD+RqQ4gg=
 github.com/danieljoos/wincred v1.2.3 h1:v7dZC2x32Ut3nEfRH+vhoZGvN72+dQ/snVXo/vMFLdQ=
 github.com/danieljoos/wincred v1.2.3/go.mod h1:6qqX0WNrS4RzPZ1tnroDzq9kY3fu1KwE7MRLQK4X0bs=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
