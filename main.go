@@ -231,21 +231,73 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		return nil, fmt.Errorf("listening on %s: %w", addr, err)
 	}
 
+	// Build the authorization URL with PKCE and RFC 8707 resource parameter.
+	authURL := c.AuthCodeURL(
+		state,
+		oauth2.S256ChallengeOption(verifier),
+		oauth2.SetAuthURLParam("resource", resourceURL),
+	)
+
 	queries := make(chan url.Values, 1)
 	// ready chan ensures the server loop has started before we trigger the browser.
 	ready := make(chan struct{})
 
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			queries <- r.URL.Query()
-			w.Header().Set("Content-Type", "text/html")
-			_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
+	mux := http.NewServeMux()
+
+	// /auth serves the landing page. It displays the IdP authorization URL as
+	// both a copyable link and a Continue button, so the user can open it in
+	// the correct browser profile if needed.
+	mux.HandleFunc("/auth", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>git-credential-oauth-generic: Start Authentication</title>
+	<meta name="color-scheme" content="light dark"/>
+	<style>
+		body { font-family: sans-serif; max-width: 600px; margin: 2em auto; padding: 0 1em; }
+		.url-box { background: #f4f4f4; border: 1px solid #ccc; border-radius: 4px; padding: 0.75em; word-break: break-all; font-family: monospace; font-size: 0.85em; margin: 1em 0; }
+		@media (prefers-color-scheme: dark) { .url-box { background: #2a2a2a; border-color: #555; } }
+		.continue { display: inline-block; margin-top: 0.5em; padding: 0.5em 1.5em; background: #0070f3; color: white; text-decoration: none; border-radius: 4px; }
+		.continue:hover { background: #005bb5; }
+	</style>
+</head>
+<body>
+	<h2>git-credential-oauth-generic</h2>
+	<p>You are about to be redirected to your identity provider to authenticate Git.</p>
+	<p>If this browser is signed into the wrong account, copy the URL below and
+	open it in the correct browser profile instead:</p>
+	<div class="url-box">%s</div>
+	<a class="continue" href="%s">Continue &rarr;</a>
+	<p style="font-style:italic; margin-top:2em">- git-credential-oauth-generic %s</p>
+</body>
+</html>`, authURL, authURL, getVersion())
+	})
+
+	// /callback receives the authorization code from the IdP redirect.
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		queries <- q
+		w.Header().Set("Content-Type", "text/html")
+		if errParam := q.Get("error"); errParam != "" {
+			errDesc := q.Get("error_description")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>git-credential-oauth-generic: Authentication failed</title>`+
+				`<meta name="color-scheme" content="light dark"/></head><body>`+
+				`<p><strong>Authentication failed:</strong> %s</p>`+
+				`<p>%s</p>`+
+				`<p style="font-style:italic">- git-credential-oauth-generic %s</p>`+
+				`</body></html>`, errParam, errDesc, getVersion())
+		} else {
+			fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
 				`<meta name="color-scheme" content="light dark"/></head><body>`+
 				`<p>Success. You may close this page and return to Git.</p>`+
-				`<p style="font-style:italic">&mdash;git-credential-oauth-generic %s</p>`+
+				`<p style="font-style:italic">- git-credential-oauth-generic %s</p>`+
 				`</body></html>`, getVersion())
-		}),
-	}
+		}
+	})
+
+	srv := &http.Server{Handler: mux}
 
 	go func() {
 		close(ready)
@@ -260,17 +312,12 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		_ = srv.Close()
 	}()
 
-	// Build the authorization URL with PKCE and RFC 8707 resource parameter.
-	authURL := c.AuthCodeURL(
-		state,
-		oauth2.S256ChallengeOption(verifier),
-		oauth2.SetAuthURLParam("resource", resourceURL),
-	)
-
 	// Inform the user and provide the URL for manual entry if the browser fails.
 	fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n")
 	fmt.Fprintf(os.Stderr, "If required you may copy and paste this URL into your browser:\n\n%s\n\n", authURL)
-	if err := opener.OpenUrl(authURL); err != nil {
+
+	landingURL := fmt.Sprintf("http://localhost:%d/auth", callbackPort)
+	if err := opener.OpenUrl(landingURL); err != nil {
 		fmt.Fprintf(os.Stderr, "There was an error opening a browser, please manually visit the provided URL:\n\n%s\n\n", err)
 	}
 

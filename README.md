@@ -3,17 +3,17 @@
 A Git credential helper that authenticates to any OAuth-protected Git host using
 standard RFCs, with no hardcoded provider knowledge:
 
-- **RFC 9728** — Protected Resource Metadata (discovery)
-- **RFC 8414** — OAuth Authorization Server Metadata
-- **RFC 7591** — Dynamic Client Registration
-- **RFC 8707** — Resource Indicators (PKCE authorization code flow)
+- **RFC 9728** - Protected Resource Metadata (discovery)
+- **RFC 8414** - OAuth Authorization Server Metadata
+- **RFC 7591** - Dynamic Client Registration
+- **RFC 8707** - Resource Indicators (PKCE authorization code flow)
 
 Originally developed for use with Cloudflare Access Managed OAuth, but should
 work with any authorization server implementing the above RFCs.
 
 ## Requirements
 
-- **Git 2.45 or later** — this helper uses the `authtype` Bearer token credential
+- **Git 2.45 or later** - this helper uses the `authtype` Bearer token credential
   format introduced in Git 2.45. Older versions of Git cannot send Bearer tokens
   and will not work with this helper. The helper will exit with an error if the
   running Git version does not support this capability.
