@@ -1,1 +1,13 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 git-credential-oauth-generic
+
+# Test binary, built with `go test -c`
+*.test
+
+# GoReleaser dist dir
+dist/
