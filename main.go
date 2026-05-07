@@ -18,13 +18,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
 
+	"github.com/andrewheberle/opener"
 	"github.com/zalando/go-keyring"
 )
 
@@ -264,7 +264,9 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 	// Inform the user and provide the URL for manual entry if the browser fails.
 	fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n")
 	fmt.Fprintf(os.Stderr, "If required you may copy and paste this URL into your browser:\n\n%s\n\n", authURL)
-	openBrowser(authURL)
+	if err := opener.OpenUrl(authURL); err != nil {
+		fmt.Fprintf(os.Stderr, "There was an error opening a browser, please manually visit the provided URL:\n\n%s\n\n", err)
+	}
 
 	// Wait for the callback or the 5-minute timeout.
 	select {
@@ -294,28 +296,6 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 			return nil, fmt.Errorf("authentication timed out after 5 minutes")
 		}
 		return nil, ctx.Err()
-	}
-}
-
-// openBrowser attempts to open the given URL in the system browser.
-func openBrowser(rawURL string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler", rawURL}
-	case "darwin":
-		cmd = "open"
-		args = []string{rawURL}
-	default:
-		cmd = "xdg-open"
-		args = []string{rawURL}
-	}
-	if _, err := exec.LookPath(cmd); err == nil {
-		if err := exec.Command(cmd, args...).Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "unable to open browser using %q: %s\n", cmd, err)
-		}
 	}
 }
 
