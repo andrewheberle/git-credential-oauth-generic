@@ -268,10 +268,10 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 	)
 
 	// Inform the user and provide the URL for manual entry if the browser fails.
-	_, _ = fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n")
-	_, _ = fmt.Fprintf(os.Stderr, "If required you may copy and paste this URL into your browser:\n\n%s\n\n", authURL)
+	fmt.Fprintf(os.Stderr, "Please complete authentication in your browser...\n")
+	fmt.Fprintf(os.Stderr, "If required you may copy and paste this URL into your browser:\n\n%s\n\n", authURL)
 	if err := opener.OpenUrl(authURL); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "There was an error opening a browser, please manually visit the provided URL:\n\n%s\n\n", err)
+		fmt.Fprintf(os.Stderr, "There was an error opening a browser, please manually visit the provided URL:\n\n%s\n\n", err)
 	}
 
 	// Wait for the callback or the 5-minute timeout.
