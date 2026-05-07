@@ -1,0 +1,67 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goarch:
+      - amd64
+      - arm64
+    goos:
+      - linux
+      - windows
+    main: ./...
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - allow_different_binary_count: true
+    formats: [tar.gz]
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+changelog:
+  use: github-native
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  draft: false
+  make_latest: true
+  replace_existing_artifacts: true
+  prerelease: auto
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+sboms:
+  - id: package
+    artifacts: package
+    disable: false
+  - artifacts: archive
+    disable: false
