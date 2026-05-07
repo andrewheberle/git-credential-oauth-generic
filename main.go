@@ -42,7 +42,7 @@ func getVersion() string {
 }
 
 func printVersion(w io.Writer) {
-	fmt.Fprintf(w, "git-credential-oauth-generic %s\n", getVersion())
+	_, _ = fmt.Fprintf(w, "git-credential-oauth-generic %s\n", getVersion())
 }
 
 // parse reads the Git credential helper key=value input from stdin.
@@ -96,7 +96,9 @@ func fetchJSON(ctx context.Context, rawURL string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, rawURL)
 	}
@@ -169,7 +171,9 @@ func registerClient(ctx context.Context, registrationEndpoint string, callbackPo
 	if err != nil {
 		return "", "", fmt.Errorf("registration request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		return "", "", fmt.Errorf("registration failed (status %d): %s", resp.StatusCode, string(b))
@@ -235,7 +239,7 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			queries <- r.URL.Query()
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
+			_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
 				`<meta name="color-scheme" content="light dark"/></head><body>`+
 				`<p>Success. You may close this page and return to Git.</p>`+
 				`<p style="font-style:italic">&mdash;git-credential-oauth-generic %s</p>`+
@@ -252,7 +256,9 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 
 	// Wait for the server goroutine to be scheduled.
 	<-ready
-	defer srv.Close()
+	defer func() {
+		_ = srv.Close()
+	}()
 
 	// Build the authorization URL with PKCE and RFC 8707 resource parameter.
 	authURL := c.AuthCodeURL(
