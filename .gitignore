@@ -5,6 +5,7 @@
 *.so
 *.dylib
 git-credential-oauth-generic
+!cmd/git-credential-oauth-generic
 
 # Test binary, built with `go test -c`
 *.test
