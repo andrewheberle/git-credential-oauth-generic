@@ -13,25 +13,37 @@ Originally developed for use with Cloudflare Access
 but should work with any authorization server implementing the above RFCs.
 
 ```mermaid
-
 sequenceDiagram
    User->>Git: A push/clone/pull
    activate Git
    Git->>Cloudflare Access: HTTP Request
    Cloudflare Access-->>Git: Access Denied
    Git->>git-credential-oauth-generic: Starts credential helper
-   git-credential-oauth-generic-->>Cloudflare Access: OAuth Discovery and Registration
+   activate git-credential-oauth-generic
+   git-credential-oauth-generic->>Cloudflare Access: OAuth Discovery and Registration
+   activate Cloudflare Access
+   Cloudflare Access-->>git-credential-oauth-generic: OAuth discovery information
+   deactivate Cloudflare Access
    git-credential-oauth-generic-->>User: Displays prompt to start authentication process
+   activate User
    User->>IdP: SSO Process
+   deactivate User
+   activate IdP
    IdP-->>User: SSO OK
-   User-->>git-credential-oauth-generic: Redirects back to callback URL
+   deactivate IdP
+   activate User
+   User-->>git-credential-oauth-generic: Provides consent and redirects back to callback URL
+   deactivate User
    git-credential-oauth-generic-->>Git: Provides Git with OAuth credentials
+   deactivate git-credential-oauth-generic
    Git->>Cloudflare Access: Authenticated access via Bearer token
    activate Cloudflare Access
    Cloudflare Access->>Reverse Proxy: Connection proxied for user
    activate Reverse Proxy
    Reverse Proxy->>Gitea: Adds HTTP Headers for authentication
+   activate Gitea
    Gitea-->>Reverse Proxy: Access Granted
+   deactivate Gitea
    Reverse Proxy-->>Cloudflare Access: Access Granted
    deactivate Reverse Proxy
    Cloudflare Access-->>Git: Access Granted
