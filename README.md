@@ -41,8 +41,9 @@ work with any authorization server implementing the above RFCs.
 6. The resulting Bearer token is returned to Git via the `authtype=Bearer` credential
    format
 
-Token storage and refresh are handled by a chained Git credential storage helper
-(e.g. `git-credential-cache`), following the same pattern as `git-credential-oauth`.
+Token storage and refresh are save to the OS keyring by default or by a chained Git
+credential storage helper (e.g. `git-credential-cache`), following the same pattern
+as `git-credential-oauth`.
 
 ## Installation
 
@@ -52,21 +53,35 @@ go install github.com/andrewheberle/git-credential-oauth-generic@latest
 
 ## Configuration
 
+Configure the credential helper:
+
+```sh
+# Linux
+git config --global --add credential.helper oauth-generic
+
+# macOS
+git config --global --add credential.helper oauth-generic
+
+# Windows (disable the "manager" helper that enabled at a system level by default)
+git config --global --add credential.helper ""
+git config --global --add credential.helper oauth-generic
+```
+
+
 Configure as a chained credential helper (storage helper first, this helper second):
 
 ```sh
 # Linux
 git config --global --add credential.helper "cache --timeout 21600"
-git config --global --add credential.helper oauth-generic
+git config --global --add credential.helper "oauth-generic -nopersist"
 
 # macOS
 git config --global --add credential.helper osxkeychain
-git config --global --add credential.helper oauth-generic
-
-# Windows
-git config --global --add credential.helper wincred
-git config --global --add credential.helper oauth-generic
+git config --global --add credential.helper "oauth-generic -nopersist"
 ```
+
+On Windows the `wincred` and `manager` (GCM) helpers do not correctly store the
+credentials output by `oauth-generic`.
 
 ### Callback port
 
@@ -75,15 +90,6 @@ redirect URI pattern. To use a different port:
 
 ```sh
 git config --global --add credential.helper "oauth-generic -port 9000"
-```
-
-### Manual client ID
-
-If the host does not support dynamic client registration (RFC 7591), you can
-supply a pre-registered client ID manually:
-
-```sh
-git config --global credential.https://git.example.com.oauthClientId <CLIENT_ID>
 ```
 
 ## Credential storage
@@ -98,8 +104,9 @@ The `client_secret` is stored securely in the OS keyring (DBUS Secret Service on
 Linux, Keychain on macOS, Windows Credential Manager on Windows) under the service
 name `git-credential-oauth-generic` with the resource URL as the account name.
 
-Access tokens and refresh tokens are stored by the chained storage helper and are
-never written to disk by this helper directly.
+Access tokens and refresh tokens are also stored in the OS keyring by default
+but may be optionally stored by the chained storage helper by adding the
+`-nopersist` option and are never written to disk by this helper directly.
 
 ## Verbose mode
 

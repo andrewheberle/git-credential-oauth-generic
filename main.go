@@ -29,8 +29,9 @@ import (
 )
 
 var (
-	verbose bool
-	version = "dev"
+	verbose   bool
+	nopersist bool
+	version   = "dev"
 )
 
 func getVersion() string {
@@ -359,22 +360,56 @@ const (
 // getClientSecret retrieves the client secret from the OS keyring for the
 // given resource URL. Returns empty string if not found.
 func getClientSecret(resourceURL string) string {
-	secret, err := keyring.Get(keyringService, resourceURL)
-	if err != nil {
-		return ""
-	}
-	return secret
+	return getKeychainItem(resourceURL, "client_secret")
 }
 
 // setClientSecret stores the client secret in the OS keyring for the given
 // resource URL.
 func setClientSecret(resourceURL, secret string) error {
-	return keyring.Set(keyringService, resourceURL, secret)
+	return keyring.Set(keyringService, resourceURL+":client_secret", secret)
+}
+
+// getKeychainItem retrieves a value from the OS keyring for the given resource URL
+// and item name.
+func getKeychainItem(resourceURL, item string) string {
+	// no-op for anything except the "client_secret" when nopersist set
+	if item != "client_secret" && nopersist {
+		return ""
+	}
+
+	value, err := keyring.Get(keyringService, resourceURL+":"+item)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// setKeychainItem stores a value in the OS keyring for the given resource URL
+// and item name.
+func setKeychainItem(resourceURL, item, value string) error {
+	// no-op for anything except the "client_secret" when nopersist set
+	if item != "client_secret" && nopersist {
+		return nil
+	}
+
+	return keyring.Set(keyringService, resourceURL+":"+item, value)
+}
+
+// deleteKeychainItem removes a value from the OS keyring for the given resource
+// URL and item name.
+func deleteKeychainItem(resourceURL, item string) {
+	// no-op for anything except the "client_secret" when nopersist set
+	if item != "client_secret" && nopersist {
+		return
+	}
+
+	_ = keyring.Delete(keyringService, resourceURL+":"+item)
 }
 
 func main() {
 	ctx := context.Background()
 	flag.BoolVar(&verbose, "verbose", false, "log debug information to stderr")
+	flag.BoolVar(&nopersist, "nopersist", false, "rely on another helper to persist credentials")
 	callbackPort := flag.Int("port", 8400, "localhost port for OAuth callback")
 	flag.Usage = func() {
 		printVersion(os.Stderr)
@@ -399,9 +434,36 @@ func main() {
 	}
 
 	switch args[0] {
-	case "store", "erase":
+	case "store":
 		// Token storage and erasure is delegated to a chained storage helper
 		// (e.g. git-credential-cache). Nothing to do here.
+		return
+
+	case "erase":
+		// no-op if we do no persist data
+		if nopersist {
+			return
+		}
+
+		// Remove stored tokens from the keyring so the next get triggers a
+		// fresh OAuth flow. client_id (git config) and client_secret (keyring)
+		// are left intact.
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		pairs := parse(string(input))
+		host := pairs["host"]
+		protocol := pairs["protocol"]
+		if protocol == "https" && host != "" {
+			resourceURL := fmt.Sprintf("https://%s", host)
+			deleteKeychainItem(resourceURL, "access_token")
+			deleteKeychainItem(resourceURL, "refresh_token")
+			deleteKeychainItem(resourceURL, "password_expiry_utc")
+			if verbose {
+				fmt.Fprintf(os.Stderr, "erased tokens for %s from keyring\n", resourceURL)
+			}
+		}
 		return
 
 	case "version":
@@ -450,13 +512,30 @@ func main() {
 
 	resourceURL := fmt.Sprintf("https://%s", host)
 
-	// --- Step 1: check for a valid refresh token passed in by the storage helper ---
+	// --- Step 1: check keyring for a valid cached access token ---
 	var token *oauth2.Token
-	if pairs["oauth_refresh_token"] != "" {
-		// We need the token endpoint to refresh; we must do discovery first.
-		// Fall through to discovery below to obtain it.
-		if verbose {
-			fmt.Fprintln(os.Stderr, "refresh token available, will attempt refresh after discovery")
+	accessToken := getKeychainItem(resourceURL, "access_token")
+	if accessToken != "" {
+		expiry := getKeychainItem(resourceURL, "password_expiry_utc")
+		if expiry != "" {
+			var expiryUnix int64
+			fmt.Sscanf(expiry, "%d", &expiryUnix)
+			token = &oauth2.Token{
+				AccessToken:  accessToken,
+				RefreshToken: getKeychainItem(resourceURL, "refresh_token"),
+				Expiry:       time.Unix(expiryUnix, 0),
+			}
+			if token.Valid() {
+				if verbose {
+					fmt.Fprintln(os.Stderr, "using cached access token from keyring")
+				}
+			} else {
+				// Token exists but is expired; clear it and attempt refresh below.
+				if verbose {
+					fmt.Fprintln(os.Stderr, "cached access token is expired")
+				}
+				token = nil
+			}
 		}
 	}
 
@@ -475,29 +554,32 @@ func main() {
 			asMeta.AuthorizationEndpoint, asMeta.TokenEndpoint, asMeta.RegistrationEndpoint, asMeta.ScopesSupported)
 	}
 
-	// --- Step 3: attempt token refresh if we have a refresh token ---
-	if pairs["oauth_refresh_token"] != "" {
-		refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-		c := oauth2.Config{
-			ClientID:     refreshClientID,
-			ClientSecret: getClientSecret(resourceURL),
-			Endpoint: oauth2.Endpoint{
-				TokenURL:  asMeta.TokenEndpoint,
-				AuthStyle: oauth2.AuthStyleInHeader,
-			},
-		}
-
-		ts := c.TokenSource(ctx, &oauth2.Token{
-			RefreshToken: pairs["oauth_refresh_token"],
-		})
-		refreshed, err := ts.Token()
-		if err != nil {
+	// --- Step 3: attempt token refresh using keyring refresh token ---
+	if token == nil {
+		refreshToken := getKeychainItem(resourceURL, "refresh_token")
+		if refreshToken != "" {
 			if verbose {
-				fmt.Fprintln(os.Stderr, "token refresh failed:", err)
+				fmt.Fprintln(os.Stderr, "attempting token refresh")
 			}
-			// Fall through to full auth flow below.
-		} else {
-			token = refreshed
+			refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
+			c := oauth2.Config{
+				ClientID:     refreshClientID,
+				ClientSecret: getClientSecret(resourceURL),
+				Endpoint: oauth2.Endpoint{
+					TokenURL:  asMeta.TokenEndpoint,
+					AuthStyle: oauth2.AuthStyleInHeader,
+				},
+			}
+			refreshed, err := c.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
+			if err != nil {
+				if verbose {
+					fmt.Fprintln(os.Stderr, "token refresh failed:", err)
+				}
+				// Clear stale refresh token and fall through to full auth flow.
+				deleteKeychainItem(resourceURL, "refresh_token")
+			} else {
+				token = refreshed
+			}
 		}
 	}
 
@@ -522,7 +604,6 @@ func main() {
 			if verbose {
 				fmt.Fprintf(os.Stderr, "registered client_id: %s\n", clientID)
 			}
-			// Persist client_id and client_secret in git config so they survive across invocations.
 			if err := setGitConfig("--global", fmt.Sprintf("credential.%s.oauthClientId", resourceURL), clientID); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: could not save client_id to git config: %v\n", err)
 			}
@@ -530,6 +611,10 @@ func main() {
 				if err := setClientSecret(resourceURL, clientSecret); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to keyring: %v\n", err)
 				}
+			}
+		} else {
+			if verbose {
+				fmt.Fprintf(os.Stderr, "using cached client_id: %s\n", clientID)
 			}
 		}
 
@@ -555,7 +640,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, "token:", token)
 	}
 
-	// --- Step 6: output credentials for Git ---
+	// --- Step 6: persist tokens to keyring ---
+	if err := setKeychainItem(resourceURL, "access_token", token.AccessToken); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save access_token to keyring: %v\n", err)
+	}
+	if token.RefreshToken != "" {
+		if err := setKeychainItem(resourceURL, "refresh_token", token.RefreshToken); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save refresh_token to keyring: %v\n", err)
+		}
+	}
+	if !token.Expiry.IsZero() {
+		if err := setKeychainItem(resourceURL, "password_expiry_utc", fmt.Sprintf("%d", token.Expiry.UTC().Unix())); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not save password_expiry_utc to keyring: %v\n", err)
+		}
+	}
+
+	// --- Step 7: output credentials for Git ---
 	// "A capability[] directive must precede any value depending on it and these
 	// directives should be the first item announced in the protocol."
 	// https://git-scm.com/docs/git-credential
