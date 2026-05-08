@@ -12,6 +12,34 @@ Originally developed for use with Cloudflare Access
 [Managed OAuth](https://blog.cloudflare.com/managed-oauth-for-access/),
 but should work with any authorization server implementing the above RFCs.
 
+```mermaid
+
+sequenceDiagram
+   User->>Git: A push/clone/pull
+   activate Git
+   Git->>Cloudflare Access: HTTP Request
+   Cloudflare Access-->>Git: Access Denied
+   Git->>git-credential-oauth-generic: Starts credential helper
+   git-credential-oauth-generic-->>Cloudflare Access: OAuth Discovery and Registration
+   git-credential-oauth-generic-->>User: Displays prompt to start authentication process
+   User->>IdP: SSO Process
+   IdP-->>User: SSO OK
+   User-->>git-credential-oauth-generic: Redirects back to callback URL
+   git-credential-oauth-generic-->>Git: Provides Git with OAuth credentials
+   Git->>Cloudflare Access: Authenticated access via Bearer token
+   activate Cloudflare Access
+   Cloudflare Access->>Reverse Proxy: Connection proxied for user
+   activate Reverse Proxy
+   Reverse Proxy->>Gitea: Adds HTTP Headers for authentication
+   Gitea-->>Reverse Proxy: Access Granted
+   Reverse Proxy-->>Cloudflare Access: Access Granted
+   deactivate Reverse Proxy
+   Cloudflare Access-->>Git: Access Granted
+   deactivate Cloudflare Access
+   Git-->>User: Git operation completed
+   deactivate Git
+```
+
 ## Requirements
 
 - **Git 2.45 or later** - this helper uses the `authtype` Bearer token credential
