@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/version"
 	"github.com/andrewheberle/simplecommand"
@@ -34,7 +33,7 @@ func (c *versionCommand) PreRun(this, runner *simplecobra.Commandeer) error {
 }
 
 func (c *versionCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
-	fmt.Fprintf(os.Stdout, "%s %s\n", cd.Root.Command.Name(), version.Version())
+	fmt.Printf("%s %s\n", cd.Root.Command.Name(), version.Version())
 
 	return nil
 }

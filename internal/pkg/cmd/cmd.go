@@ -55,7 +55,9 @@ func (c *rootCommand) PreRun(this, runner *simplecobra.Commandeer) error {
 
 func (c *rootCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
 	cmd := cd.CobraCommand
-	cmd.Usage()
+	if err := cmd.Usage(); err != nil {
+		c.logger.Error("could not display usage", "error", err)
+	}
 
 	return fmt.Errorf("please run a sub-command")
 }

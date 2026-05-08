@@ -54,6 +54,8 @@ func (c *getCommand) PreRun(this, runner *simplecobra.Commandeer) error {
 }
 
 func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
+	c.logger.Debug("starting helper", "version", version.Version())
+
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		log.Fatalln(err)
