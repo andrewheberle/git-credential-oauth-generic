@@ -250,29 +250,31 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 	// the correct browser profile if needed.
 	mux.HandleFunc("/auth", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html lang="en">
-<head>
-	<title>git-credential-oauth-generic: Start Authentication</title>
-	<meta name="color-scheme" content="light dark"/>
-	<style>
-		body { font-family: sans-serif; max-width: 600px; margin: 2em auto; padding: 0 1em; }
-		.url-box { background: #f4f4f4; border: 1px solid #ccc; border-radius: 4px; padding: 0.75em; word-break: break-all; font-family: monospace; font-size: 0.85em; margin: 1em 0; }
-		@media (prefers-color-scheme: dark) { .url-box { background: #2a2a2a; border-color: #555; } }
-		.continue { display: inline-block; margin-top: 0.5em; padding: 0.5em 1.5em; background: #0070f3; color: white; text-decoration: none; border-radius: 4px; }
-		.continue:hover { background: #005bb5; }
-	</style>
-</head>
-<body>
-	<h2>git-credential-oauth-generic</h2>
-	<p>You are about to be redirected to your identity provider to authenticate Git.</p>
-	<p>If this browser is signed into the wrong account, copy the URL below and
-	open it in the correct browser profile instead:</p>
-	<div class="url-box">%s</div>
-	<a class="continue" href="%s">Continue &rarr;</a>
-	<p style="font-style:italic; margin-top:2em">- git-credential-oauth-generic %s</p>
-</body>
-</html>`, authURL, authURL, getVersion())
+		if _, err := fmt.Fprintf(w, `<!DOCTYPE html>`+
+			`<html lang="en">`+
+			`<head>`+
+			`<title>git-credential-oauth-generic: Start Authentication</title>`+
+			`<meta name="color-scheme" content="light dark"/>`+
+			`<style>`+
+			`	body { font-family: sans-serif; max-width: 600px; margin: 2em auto; padding: 0 1em; }`+
+			`	.url-box { background: #f4f4f4; border: 1px solid #ccc; border-radius: 4px; padding: 0.75em; word-break: break-all; font-family: monospace; font-size: 0.85em; margin: 1em 0; }`+
+			`	@media (prefers-color-scheme: dark) { .url-box { background: #2a2a2a; border-color: #555; } }`+
+			`	.continue { display: inline-block; margin-top: 0.5em; padding: 0.5em 1.5em; background: #0070f3; color: white; text-decoration: none; border-radius: 4px; }`+
+			`	.continue:hover { background: #005bb5; }`+
+			`</style>`+
+			`</head>`+
+			`<body>`+
+			`	<h2>git-credential-oauth-generic</h2>`+
+			`	<p>You are about to be redirected to your identity provider to authenticate Git.</p>`+
+			`	<p>If this browser is signed into the wrong account, copy the URL below and`+
+			`	open it in the correct browser profile instead:</p>`+
+			`	<div class="url-box">%s</div>`+
+			`	<a class="continue" href="%s">Continue &rarr;</a>`+
+			`	<p style="font-style:italic; margin-top:2em">- git-credential-oauth-generic %s</p>`+
+			`</body>`+
+			`</html>`, authURL, authURL, getVersion()); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing output for /auth handler: %s", err)
+		}
 	})
 
 	// /callback receives the authorization code from the IdP redirect.
@@ -283,18 +285,22 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		if errParam := q.Get("error"); errParam != "" {
 			errDesc := q.Get("error_description")
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>git-credential-oauth-generic: Authentication failed</title>`+
+			if _, err := fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>git-credential-oauth-generic: Authentication failed</title>`+
 				`<meta name="color-scheme" content="light dark"/></head><body>`+
 				`<p><strong>Authentication failed:</strong> %s</p>`+
 				`<p>%s</p>`+
 				`<p style="font-style:italic">- git-credential-oauth-generic %s</p>`+
-				`</body></html>`, errParam, errDesc, getVersion())
+				`</body></html>`, errParam, errDesc, getVersion()); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing output for /callback handler: %s", err)
+			}
 		} else {
-			fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
+			if _, err := fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>Git authentication</title>`+
 				`<meta name="color-scheme" content="light dark"/></head><body>`+
 				`<p>Success. You may close this page and return to Git.</p>`+
 				`<p style="font-style:italic">- git-credential-oauth-generic %s</p>`+
-				`</body></html>`, getVersion())
+				`</body></html>`, getVersion()); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing output for generic handler: %s", err)
+			}
 		}
 	})
 
@@ -519,7 +525,7 @@ func main() {
 		expiry := getKeychainItem(resourceURL, "password_expiry_utc")
 		if expiry != "" {
 			var expiryUnix int64
-			fmt.Sscanf(expiry, "%d", &expiryUnix)
+			_, _ = fmt.Sscanf(expiry, "%d", &expiryUnix)
 			token = &oauth2.Token{
 				AccessToken:  accessToken,
 				RefreshToken: getKeychainItem(resourceURL, "refresh_token"),
