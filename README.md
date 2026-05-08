@@ -8,8 +8,9 @@ standard RFCs, with no hardcoded provider knowledge:
 - **RFC 7591** - Dynamic Client Registration
 - **RFC 8707** - Resource Indicators (PKCE authorization code flow)
 
-Originally developed for use with Cloudflare Access Managed OAuth, but should
-work with any authorization server implementing the above RFCs.
+Originally developed for use with Cloudflare Access
+[Managed OAuth](https://blog.cloudflare.com/managed-oauth-for-access/),
+but should work with any authorization server implementing the above RFCs.
 
 ## Requirements
 
@@ -42,8 +43,7 @@ work with any authorization server implementing the above RFCs.
    format
 
 Token storage and refresh are save to the OS keyring by default or by a chained Git
-credential storage helper (e.g. `git-credential-cache`), following the same pattern
-as `git-credential-oauth`.
+credential storage helper (e.g. `git-credential-cache`).
 
 ## Installation
 
