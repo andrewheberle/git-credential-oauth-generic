@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
@@ -284,13 +285,15 @@ func getToken(ctx context.Context, c oauth2.Config, resourceURL string, callback
 		w.Header().Set("Content-Type", "text/html")
 		if errParam := q.Get("error"); errParam != "" {
 			errDesc := q.Get("error_description")
+			safeErrParam := html.EscapeString(errParam)
+			safeErrDesc := html.EscapeString(errDesc)
 			w.WriteHeader(http.StatusBadRequest)
 			if _, err := fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><title>git-credential-oauth-generic: Authentication failed</title>`+
 				`<meta name="color-scheme" content="light dark"/></head><body>`+
 				`<p><strong>Authentication failed:</strong> %s</p>`+
 				`<p>%s</p>`+
 				`<p style="font-style:italic">- git-credential-oauth-generic %s</p>`+
-				`</body></html>`, errParam, errDesc, getVersion()); err != nil {
+				`</body></html>`, safeErrParam, safeErrDesc, getVersion()); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing output for /callback handler: %s", err)
 			}
 		} else {
