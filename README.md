@@ -73,11 +73,11 @@ Configure as a chained credential helper (storage helper first, this helper seco
 ```sh
 # Linux
 git config --global --add credential.helper "cache --timeout 21600"
-git config --global --add credential.helper "oauth-generic -nopersist"
+git config --global --add credential.helper "oauth-generic --nopersist"
 
 # macOS
 git config --global --add credential.helper osxkeychain
-git config --global --add credential.helper "oauth-generic -nopersist"
+git config --global --add credential.helper "oauth-generic --nopersist"
 ```
 
 On Windows the `wincred` and `manager` (GCM) helpers do not correctly store the
@@ -89,7 +89,7 @@ The default callback port is `8400`, matching Cloudflare Access's expected
 redirect URI pattern. To use a different port:
 
 ```sh
-git config --global --add credential.helper "oauth-generic -port 9000"
+git config --global --add credential.helper "oauth-generic --port 9000"
 ```
 
 ## Credential storage
@@ -106,16 +106,16 @@ name `git-credential-oauth-generic` with the resource URL as the account name.
 
 Access tokens and refresh tokens are also stored in the OS keyring by default
 but may be optionally stored by the chained storage helper by adding the
-`-nopersist` option and are never written to disk by this helper directly.
+`--nopersist` option and are never written to disk by this helper directly.
 
 ## Verbose mode
 
 ```sh
-git config --global --add credential.helper "oauth-generic -verbose"
+git config --global --add credential.helper "oauth-generic --verbose"
 ```
 
 Or test directly:
 
 ```sh
-printf 'protocol=https\nhost=git.example.com\n' | git-credential-oauth-generic -verbose get
+printf 'protocol=https\nhost=git.example.com\n' | git-credential-oauth-generic --verbose get
 ```

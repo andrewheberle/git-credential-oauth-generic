@@ -1,0 +1,5 @@
+{{ define "content" -}}
+<p><strong>Authentication failed:</strong> {{ .Error }}</p>
+<p>{{ .ErrorDescription }}</p>
+{{- end }}
+{{ template "page" . }}

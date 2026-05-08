@@ -1,0 +1,8 @@
+{{ define "content" -}}
+<h2>git-credential-oauth-generic</h2>
+<p>You are about to be redirected to your identity provider to authenticate Git.</p>
+<p>If this browser is signed into the wrong account, copy the URL below and open it in the correct browser profile instead:</p>
+<div class="url-box">{{ .AuthUrl }}</div>
+<a class="continue" href="{{ .AuthUrl }}">Continue &rarr;</a>
+{{- end }}
+{{ template "page" . }}
