@@ -12,6 +12,8 @@ Originally developed for use with Cloudflare Access
 [Managed OAuth](https://blog.cloudflare.com/managed-oauth-for-access/),
 but should work with any authorization server implementing the above RFCs.
 
+## Example Flow with Cloudflare Access
+
 ```mermaid
 sequenceDiagram
    User->>Git: A push/clone/pull
@@ -99,14 +101,15 @@ Configure the credential helper:
 # Linux
 git config --global --add credential.helper oauth-generic
 
-# macOS
+# macOS (untested)
 git config --global --add credential.helper oauth-generic
 
-# Windows (disable the "manager" helper that enabled at a system level by default)
+# Windows
+# The Git Credential Manager (GCM) is enabled at a system level by default and must
+# be disabled (see below for further information)
 git config --global --add credential.helper ""
 git config --global --add credential.helper oauth-generic
 ```
-
 
 Configure as a chained credential helper (storage helper first, this helper second):
 
@@ -115,13 +118,13 @@ Configure as a chained credential helper (storage helper first, this helper seco
 git config --global --add credential.helper "cache --timeout 21600"
 git config --global --add credential.helper "oauth-generic --nopersist"
 
-# macOS
+# macOS (untested)
 git config --global --add credential.helper osxkeychain
 git config --global --add credential.helper "oauth-generic --nopersist"
 ```
 
 On Windows the `wincred` and `manager` (GCM) helpers do not correctly store the
-credentials output by `oauth-generic`.
+credentials output by `oauth-generic` based on testing so far.
 
 ### Callback port
 
@@ -159,3 +162,24 @@ Or test directly:
 ```sh
 printf 'protocol=https\nhost=git.example.com\n' | git-credential-oauth-generic --verbose get
 ```
+
+## Notes for Windows users
+
+As noted above, on a default install of Git on Windows the Git Credential Manager
+will not correctly store the returned credentials for subsequent git actions
+(tested as of Git 2.54.0 with Git Credential Manager 2.7.3) so the options are:
+
+1. Globally disable Git Credential Manager (as shown above)
+2. Leave Git Credential Manager enabled but follow the below process to have only `oauth-generic` enabled:
+   ```sh
+   # Enable the generic OAuth credential manager
+   git config --global --add credential.helper oauth-generic
+
+   # Clone/pull to initially authenticate (cancel the GCM login prompt that appears)
+   git clone https://git.example.com/user/test-repo.git
+
+   # In your local repo disable all other credential helpers and enable oauth-generic
+   cd test-repo
+   git config --local --add credential.helper ""
+   git config --local --add credential.helper oauth-generic
+   ```

@@ -3,7 +3,8 @@
 This is a minimal example of using this credential helper to authenticate
 against a Gitea instance that is protected by Cloudflare Access.
 
-This example uses HAProxy to validate the JWT from Cloudflare Access and set the required HTTP headers for Gitea [reverse proxy authentication](https://docs.gitea.com/administration/authentication#reverse-proxy).
+This example uses HAProxy to validate the JWT from Cloudflare Access and set
+the required HTTP headers for Gitea [reverse proxy authentication](https://docs.gitea.com/administration/authentication#reverse-proxy).
 
 ## Prerequisites
 
@@ -24,7 +25,8 @@ This example uses HAProxy to validate the JWT from Cloudflare Access and set the
    JWT_AUD=audience-of-gitea-zero-trust-application
    CLOUDFLARED_TOKEN=token-from-cloudflare-tunnel-setup
    ```
-5. Grab keys to verify the JWT from Cloudflare Access where [this](https://github.com/andrewheberle/jwks-to-pem) may be helpful.
+5. Grab the keys in PEM format to verify the JWT from Cloudflare Access
+ ([this](https://github.com/andrewheberle/jwks-to-pem) may be helpful).
 
 ## Start Gitea
 
@@ -33,7 +35,8 @@ cd /path/to/compose/file/
 docker compose up -d
 ```
 
-At this point you should visit https://gitea.yourdomain.com to ensure Gitea is configured properly and create a test respository to clone or push to.
+At this point you should visit https://gitea.yourdomain.com to ensure Gitea is
+configured properly and create a test respository to clone or push to.
 
 ## Set Up The Credential Helper
 
@@ -48,4 +51,3 @@ git clone https://gitea.yourdomain.com/username/repo.git
 ```
 
 When you attempt to authenticate against the repository a browser should be opened that will take you through the authentication process.
-
