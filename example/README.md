@@ -3,19 +3,36 @@
 This is a minimal example of using this credential helper to authenticate
 against a Gitea instance that is protected by Cloudflare Access.
 
-This example uses HAProxy to validate the JWT from Cloudflare Access and set
-the required HTTP headers for Gitea [reverse proxy authentication](https://docs.gitea.com/administration/authentication#reverse-proxy).
+This example uses HAProxy with a SPOA
+([jwt-spoa](https://github.com/andrewheberle/jwt-spoa)) to validate the JWT
+from Cloudflare Access to allow HAProxy to set the required HTTP headers for
+Gitea [reverse proxy authentication](https://docs.gitea.com/administration/authentication#reverse-proxy).
+
+```mermaid
+sequenceDiagram
+   User->>+Cloudflare Zero Trust: Request
+   Cloudflare Zero Trust->>+cloudflared: Request with JWT
+   cloudflared->>+HAProxy: Request with JWT
+   HAProxy->>+jwt-spoa: Sends JWT
+   jwt-spoa-->>-HAProxy: JWT Verified with Claims
+   HAProxy->>+Gitea: Reverse Proxy Auth Headers Added
+   Gitea-->>-HAProxy: Response
+   HAProxy-->>-cloudflared: Response
+   cloudflared-->>-Cloudflare Zero Trust: Response
+   Cloudflare Zero Trust-->>-User: Response
+```
 
 ## Prerequisites
 
 1. Docker
 2. The following Cloudflare resources are required:
    * DNS zone on Cloudflare (yourdomain.com)
-   * A configured Cloudflare Zero Trust application for Gitea with Managed OAuth enabled (gitea.yourdomain.com)
+   * A configured Cloudflare Zero Trust application for Gitea with Managed
+     OAuth enabled (gitea.yourdomain.com)
    * A Cloudflare tunnel token (for providing access)
 3. Create the required folder structure:
    ```sh
-   mkdir -p /path/to/compose/file/{config,data,keys}
+   mkdir -p /path/to/compose/file/{config,data}
    ```
 4. Configure required secrets/envrionment variables:
 
@@ -23,10 +40,10 @@ the required HTTP headers for Gitea [reverse proxy authentication](https://docs.
 
    ```sh
    JWT_AUD=audience-of-gitea-zero-trust-application
+   JWKS_URL=https://yourteamdomain.cloudflareaccess.com/cdn-cgi/access/certs
+   JWT_ISS=https://yourteamdomain.cloudflareaccess.com
    CLOUDFLARED_TOKEN=token-from-cloudflare-tunnel-setup
    ```
-5. Grab the keys in PEM format to verify the JWT from Cloudflare Access
- ([this](https://github.com/andrewheberle/jwks-to-pem) may be helpful).
 
 ## Start Gitea
 
@@ -50,4 +67,5 @@ git config --global --add credential.helper oauth-generic
 git clone https://gitea.yourdomain.com/username/repo.git
 ```
 
-When you attempt to authenticate against the repository a browser should be opened that will take you through the authentication process.
+When you attempt to authenticate against the repository a browser should be
+opened that will take you through the authentication process.
