@@ -12,18 +12,24 @@ services:
       GITEA__service__ENABLE_REVERSE_PROXY_AUTHENTICATION_API: "true"
       GITEA__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION: "true"
       GITEA__service__ENABLE_REVERSE_PROXY_EMAIL: "true"
-      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__security__REVERSE_PROXY_TRUSTED_PROXIES: "172.22.0.0/16"
+      GITEA__server__USE_PROXY_PROTOCOL: "true"
   haproxy:
     container_name: haproxy
     image: haproxy:lts
     command: [ "-f", "/config/haproxy.cfg" ]
     environment:
-      - JWT_AUD=${JWT_AUD:?error}
       - JWT_HEADER=cf-access-jwt-assertion
-      - JWT_ALGORITHM=RS256
     volumes:
       - ./haproxy.cfg:/config/haproxy.cfg:ro
-      - ./keys:/keys:ro
+      - ./spoe.cfg:/config/spoe.cfg:ro
+  spoa:
+    container_name: spoa
+    image: ghcr.io/andrewheberle/jwt-spoa:v0.2.1
+    environment:
+      - JWT_JWT_AUD=${JWT_AUD:?error}
+      - JWT_JWT_ISS=${JWT_ISS:?error}
+      - JWT_JWT_JWKS=${JWKS_URL:?error}
   cloudflared:
     container_name: cloudflared
     image: cloudflare/cloudflared:2026.6.0
