@@ -2,9 +2,10 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"os"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/gitcredential"
 	"github.com/andrewheberle/simplecommand"
 	"github.com/bep/simplecobra"
 )
@@ -32,9 +33,5 @@ func (c *capabilityCommand) PreRun(this, runner *simplecobra.Commandeer) error {
 }
 
 func (c *capabilityCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
-	// https://git-scm.com/docs/git-credential#CAPA-IOFMT
-	fmt.Println("version 0")
-	fmt.Println("capability authtype")
-
-	return nil
+	return gitcredential.WriteCapabilities(os.Stdout)
 }
