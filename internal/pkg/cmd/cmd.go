@@ -7,9 +7,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/tokencache"
 	"github.com/andrewheberle/simplecommand"
 	"github.com/bep/simplecobra"
 	"github.com/zalando/go-keyring"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -121,51 +123,34 @@ func parse(input string) map[string]string {
 	return pairs
 }
 
+// tokenCache stores the tokens obtained for a resource URL between runs.
+type tokenCache interface {
+	Load(ctx context.Context, resourceURL string) (*oauth2.Token, error)
+	Save(ctx context.Context, resourceURL string, token *oauth2.Token) error
+	Erase(ctx context.Context, resourceURL string)
+}
+
+// newTokenCache returns the Token cache to use: the OS keyring, or nothing at
+// all when a chained Git credential helper handles persistence (--nopersist).
+func newTokenCache(nopersist bool) tokenCache {
+	if nopersist {
+		return tokencache.NewNoop()
+	}
+	return tokencache.NewKeyring(keyringService)
+}
+
 // getClientSecret retrieves the client secret from the OS keyring for the
 // given resource URL. Returns empty string if not found.
 func getClientSecret(resourceURL string) string {
-	return getKeychainItem(resourceURL, "client_secret", false)
-}
-
-// setClientSecret stores the client secret in the OS keyring for the given
-// resource URL.
-func setClientSecret(resourceURL, secret string) error {
-	return setKeychainItem(resourceURL, "client_secret", secret, false)
-}
-
-// getKeychainItem retrieves a value from the OS keyring for the given resource URL
-// and item name.
-func getKeychainItem(resourceURL, item string, nopersist bool) string {
-	// no-op when nopersist set
-	if nopersist {
-		return ""
-	}
-
-	value, err := keyring.Get(keyringService, resourceURL+":"+item)
+	value, err := keyring.Get(keyringService, resourceURL+":client_secret")
 	if err != nil {
 		return ""
 	}
 	return value
 }
 
-// setKeychainItem stores a value in the OS keyring for the given resource URL
-// and item name.
-func setKeychainItem(resourceURL, item, value string, nopersist bool) error {
-	// no-op when nopersist set
-	if nopersist {
-		return nil
-	}
-
-	return keyring.Set(keyringService, resourceURL+":"+item, value)
-}
-
-// deleteKeychainItem removes a value from the OS keyring for the given resource
-// URL and item name.
-func deleteKeychainItem(resourceURL, item string, nopersist bool) {
-	// no-op when nopersist set
-	if nopersist {
-		return
-	}
-
-	_ = keyring.Delete(keyringService, resourceURL+":"+item)
+// setClientSecret stores the client secret in the OS keyring for the given
+// resource URL.
+func setClientSecret(resourceURL, secret string) error {
+	return keyring.Set(keyringService, resourceURL+":client_secret", secret)
 }

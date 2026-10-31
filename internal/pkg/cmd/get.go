@@ -76,26 +76,22 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 
 	resourceURL := fmt.Sprintf("https://%s", host)
 
-	// --- Step 1: check keyring for a valid cached access token ---
-	var token *oauth2.Token
-	accessToken := getKeychainItem(resourceURL, "access_token", c.nopersist)
-	if accessToken != "" {
-		expiry := getKeychainItem(resourceURL, "password_expiry_utc", c.nopersist)
-		if expiry != "" {
-			var expiryUnix int64
-			_, _ = fmt.Sscanf(expiry, "%d", &expiryUnix)
-			token = &oauth2.Token{
-				AccessToken:  accessToken,
-				RefreshToken: getKeychainItem(resourceURL, "refresh_token", c.nopersist),
-				Expiry:       time.Unix(expiryUnix, 0),
-			}
-			if token.Valid() {
-				c.logger.Debug("using cached access token from keyring")
-			} else {
-				// Token exists but is expired; clear it and attempt refresh below.
-				c.logger.Debug("cached access token is expired")
-				token = nil
-			}
+	// --- Step 1: check the token cache for a valid access token ---
+	cache := newTokenCache(c.nopersist)
+	token, err := cache.Load(ctx, resourceURL)
+	if err != nil {
+		c.logger.Debug("could not read token cache", "error", err)
+		token = nil
+	}
+	var refreshToken string
+	if token != nil {
+		refreshToken = token.RefreshToken
+		if token.Valid() {
+			c.logger.Debug("using cached access token")
+		} else {
+			// No usable access token; attempt refresh below.
+			c.logger.Debug("cached access token is missing or expired")
+			token = nil
 		}
 	}
 
@@ -115,9 +111,8 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 		"scopes", asMeta.ScopesSupported,
 	)
 
-	// --- Step 3: attempt token refresh using keyring refresh token ---
+	// --- Step 3: attempt token refresh using the cached refresh token ---
 	if token == nil {
-		refreshToken := getKeychainItem(resourceURL, "refresh_token", c.nopersist)
 		if refreshToken != "" {
 			c.logger.Debug("attempting token refresh")
 			refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
@@ -133,8 +128,8 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 			if err != nil {
 				c.logger.Debug("token refresh failed", "error", err)
 
-				// Clear stale refresh token and fall through to full auth flow.
-				deleteKeychainItem(resourceURL, "refresh_token", c.nopersist)
+				// Clear the stale entry and fall through to full auth flow.
+				cache.Erase(ctx, resourceURL)
 			} else {
 				token = refreshed
 			}
@@ -191,19 +186,9 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 
 	c.logger.Debug("got token", "token", token)
 
-	// --- Step 6: persist tokens to keyring ---
-	if err := setKeychainItem(resourceURL, "access_token", token.AccessToken, c.nopersist); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not save access_token to keyring: %v\n", err)
-	}
-	if token.RefreshToken != "" {
-		if err := setKeychainItem(resourceURL, "refresh_token", token.RefreshToken, c.nopersist); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not save refresh_token to keyring: %v\n", err)
-		}
-	}
-	if !token.Expiry.IsZero() {
-		if err := setKeychainItem(resourceURL, "password_expiry_utc", fmt.Sprintf("%d", token.Expiry.UTC().Unix()), c.nopersist); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not save password_expiry_utc to keyring: %v\n", err)
-		}
+	// --- Step 6: persist tokens to the token cache ---
+	if err := cache.Save(ctx, resourceURL, token); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not save tokens to keyring: %v\n", err)
 	}
 
 	// --- Step 7: output credentials for Git ---
