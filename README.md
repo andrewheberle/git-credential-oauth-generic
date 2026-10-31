@@ -134,10 +134,6 @@ Configure as a chained credential helper (storage helper first, this helper seco
 # Linux
 git config --global --add credential.helper "cache --timeout 21600"
 git config --global --add credential.helper "oauth-generic --nopersist"
-
-# macOS (untested)
-git config --global --add credential.helper osxkeychain
-git config --global --add credential.helper "oauth-generic --nopersist"
 ```
 
 On Windows the `wincred` and `manager` (GCM) helpers do not correctly store the
