@@ -25,7 +25,7 @@ services:
       - ./spoe.cfg:/config/spoe.cfg:ro
   spoa:
     container_name: spoa
-    image: ghcr.io/andrewheberle/jwt-spoa:v0.2.1
+    image: ghcr.io/andrewheberle/jwt-spoa:v0.3.1
     environment:
       - JWT_JWT_AUD=${JWT_AUD:?error}
       - JWT_JWT_ISS=${JWT_ISS:?error}
