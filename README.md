@@ -73,16 +73,23 @@ sequenceDiagram
 ## How it works
 
 1. Git invokes the helper with `protocol=https` and `host=<host>` on stdin
-2. The helper fetches `https://<host>/.well-known/oauth-protected-resource` (RFC 9728)
-   to discover the authorization server
-3. The AS metadata is fetched (RFC 8414) to obtain endpoints and supported scopes
-4. If no `client_id` is cached in Git config, the helper registers dynamically
+2. If a still-valid access token is cached for the host, it is returned to Git
+   straight away, without any network requests
+3. Otherwise the helper fetches `https://<host>/.well-known/oauth-protected-resource`
+   (RFC 9728) to discover the authorization server
+4. The AS metadata is fetched (RFC 8414) to obtain endpoints and supported scopes
+5. If a refresh token is cached and a `client_id` is configured, the helper refreshes
+   the access token without opening the browser
+6. If no `client_id` is cached in Git config, the helper registers dynamically
    (RFC 7591) and stores the resulting `client_id` in Git config; the `client_secret`
    returned by the server is stored securely in the OS keyring
-5. A PKCE authorization code flow is performed with a `resource` parameter (RFC 8707),
+7. A PKCE authorization code flow is performed with a `resource` parameter (RFC 8707),
    opening the system browser and listening for the callback on localhost
-6. The resulting Bearer token is returned to Git via the `authtype=Bearer` credential
+8. The resulting Bearer token is returned to Git via the `authtype=Bearer` credential
    format
+
+Requests to the host and authorization server (discovery, registration and token
+refresh) time out after 30 seconds; the browser sign-in has 5 minutes.
 
 Token storage and refresh are save to the OS keyring by default or by a chained Git
 credential storage helper (e.g. `git-credential-cache`).

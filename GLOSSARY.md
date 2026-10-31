@@ -15,3 +15,11 @@ _Avoid_: keychain, token store, credential store
 **Registered client**:
 The OAuth client this helper is known as to an authorization server: a client ID (in Git config) and, if one was issued, a client secret (in the OS keyring). It belongs to client registration, not to the Token cache, and outlives any token.
 _Avoid_: app, client credentials
+
+**Credential acquisition**:
+Turning a Resource URL into an access token Git can use, preferring in order: a valid token from the Token cache, a refresh, then the Authorizer (registering a client first if none is registered).
+_Avoid_: login, auth flow, token fetch
+
+**Authorizer**:
+The interactive step of Credential acquisition: the PKCE authorization code flow in the user's browser, with a localhost callback.
+_Avoid_: browser login, OAuth dance
