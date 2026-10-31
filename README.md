@@ -93,6 +93,11 @@ sequenceDiagram
 Requests to the host and authorization server (discovery, registration and token
 refresh) time out after 30 seconds; the browser sign-in has 5 minutes.
 
+During the browser sign-in, the page shown after the redirect reflects the real
+outcome: it reports success only once the access token has been obtained. Callbacks
+that don't belong to the sign-in in progress (for example from a stale browser tab)
+are answered with an error page and ignored, so the current sign-in can still finish.
+
 Token storage and refresh are save to the OS keyring by default or by a chained Git
 credential storage helper (e.g. `git-credential-cache`).
 
