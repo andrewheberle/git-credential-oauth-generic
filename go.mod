@@ -1,13 +1,13 @@
 module github.com/andrewheberle/git-credential-oauth-generic
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/andrewheberle/opener v1.0.2
 	github.com/andrewheberle/simplecommand v0.8.0
 	github.com/bep/simplecobra v0.8.0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
