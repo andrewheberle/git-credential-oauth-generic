@@ -17,7 +17,7 @@ The per-Resource URL store of the access token, refresh token and expiry that th
 _Avoid_: keychain, token store, credential store
 
 **Registered client**:
-The OAuth client this helper is known as to an authorization server: a client ID (in Git config) and, if one was issued, a client secret (in the OS keyring). It belongs to client registration, not to the Token cache, and outlives any token.
+The OAuth client this helper is known as to an authorization server: a client ID and the redirect URI it was registered with (in Git config) and, if one was issued, a client secret (in the OS keyring, keyed by client ID). It belongs to client registration, not to the Token cache, and outlives any token. A client ID set by hand has no recorded redirect URI and is never replaced.
 _Avoid_: app, client credentials
 
 **Credential acquisition**:
