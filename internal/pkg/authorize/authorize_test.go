@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/acquire"
 	"golang.org/x/oauth2"
 )
 
@@ -100,6 +101,39 @@ func (idp *fakeIdP) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// exchange stands in for Credential acquisition's code exchange: it trades
+// the code at the fake IdP's token endpoint, which checks the PKCE verifier
+// and the resource parameter.
+func (idp *fakeIdP) exchange(ctx context.Context, code, verifier string) (*oauth2.Token, error) {
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"code_verifier": {verifier},
+		"resource":      {testResource},
+		"client_id":     {"client-id"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, idp.URL+"/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := idp.Client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return &oauth2.Token{AccessToken: body.AccessToken, TokenType: "Bearer"}, nil
 }
 
 // page is one response the test browser received.
@@ -341,18 +375,14 @@ func TestAuthorize(t *testing.T) {
 				l.Timeout = 10 * time.Second
 			}
 
-			cfg := oauth2.Config{
-				ClientID:    "client-id",
-				RedirectURL: e.callback,
-				Endpoint: oauth2.Endpoint{
-					AuthURL:   idp.URL + "/authorize",
-					TokenURL:  idp.URL + "/token",
-					AuthStyle: oauth2.AuthStyleInParams,
-				},
+			req := acquire.AuthorizationRequest{
+				AuthorizationEndpoint: idp.URL + "/authorize",
+				ClientID:              "client-id",
+				RedirectURI:           e.callback,
+				Resource:              testResource,
 			}
-			ctx := context.WithValue(context.Background(), oauth2.HTTPClient, idp.Client())
 
-			token, err := l.Authorize(ctx, cfg, testResource)
+			token, err := l.Authorize(context.Background(), req, idp.exchange)
 
 			select {
 			case <-browsed:

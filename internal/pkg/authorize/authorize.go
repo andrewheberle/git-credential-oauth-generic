@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/acquire"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/version"
 	"github.com/andrewheberle/opener"
 	"golang.org/x/oauth2"
@@ -75,21 +76,19 @@ type result struct {
 	err   error
 }
 
-// Authorize runs the authorization code flow for cfg with PKCE, passing
-// resourceURL as the RFC 8707 resource parameter, and returns the token.
+// Authorize runs the authorization code flow for req with PKCE, passing
+// req.Resource as the RFC 8707 resource parameter, and returns the token that
+// exchange gives for the authorization code. It matches acquire.Authorize.
 //
-// It listens on the host and port of cfg.RedirectURL and opens a landing page
+// It listens on the host and port of req.RedirectURI and opens a landing page
 // that links to the authorization server. Callbacks whose state does not
 // match are answered with an error page and otherwise ignored, so a stale tab
 // or a stray request cannot end the sign-in. The first callback with the
 // right state settles it: an error from the authorization server, a missing
 // code or a failed code exchange fails it; otherwise the token is returned.
-// The browser is shown the real outcome, and any later callback is told the
-// sign-in has already completed.
-//
-// The context should carry the HTTP client for the code exchange (see
-// oauth2.HTTPClient), as Credential acquisition provides.
-func (l *Loopback) Authorize(ctx context.Context, cfg oauth2.Config, resourceURL string) (*oauth2.Token, error) {
+// The browser is shown the real outcome, waiting for the exchange, and any
+// later callback is told the sign-in has already completed.
+func (l *Loopback) Authorize(ctx context.Context, req acquire.AuthorizationRequest, exchange acquire.Exchange) (*oauth2.Token, error) {
 	open, out, logger, timeout := l.Open, l.Out, l.Logger, l.Timeout
 	if open == nil {
 		open = opener.OpenUrl
@@ -104,9 +103,9 @@ func (l *Loopback) Authorize(ctx context.Context, cfg oauth2.Config, resourceURL
 		timeout = DefaultTimeout
 	}
 
-	redirect, err := url.Parse(cfg.RedirectURL)
+	redirect, err := url.Parse(req.RedirectURI)
 	if err != nil || redirect.Host == "" {
-		return nil, fmt.Errorf("invalid redirect URL %q", cfg.RedirectURL)
+		return nil, fmt.Errorf("invalid redirect URL %q", req.RedirectURI)
 	}
 	callbackPath := redirect.Path
 	if callbackPath == "" {
@@ -125,10 +124,16 @@ func (l *Loopback) Authorize(ctx context.Context, cfg oauth2.Config, resourceURL
 		return nil, fmt.Errorf("listening on %s: %w", redirect.Host, err)
 	}
 
-	authURL := cfg.AuthCodeURL(
+	authCfg := oauth2.Config{
+		ClientID:    req.ClientID,
+		Endpoint:    oauth2.Endpoint{AuthURL: req.AuthorizationEndpoint},
+		RedirectURL: req.RedirectURI,
+		Scopes:      req.Scopes,
+	}
+	authURL := authCfg.AuthCodeURL(
 		state,
 		oauth2.S256ChallengeOption(verifier),
-		oauth2.SetAuthURLParam("resource", resourceURL),
+		oauth2.SetAuthURLParam("resource", req.Resource),
 	)
 
 	done := make(chan result, 1)
@@ -178,7 +183,7 @@ func (l *Loopback) Authorize(ctx context.Context, cfg oauth2.Config, resourceURL
 		settled = true
 		mu.Unlock()
 
-		token, status, page, data, err := l.complete(ctx, cfg, q, verifier, resourceURL)
+		token, status, page, data, err := l.complete(ctx, exchange, q, verifier)
 		render(w, status, page, data)
 		done <- result{token: token, err: err}
 	})
@@ -218,7 +223,7 @@ func (l *Loopback) Authorize(ctx context.Context, cfg oauth2.Config, resourceURL
 
 // complete settles a sign-in from a callback with the right state: it checks
 // for an authorization error, exchanges the code, and says which page to show.
-func (l *Loopback) complete(ctx context.Context, cfg oauth2.Config, q url.Values, verifier, resourceURL string) (*oauth2.Token, int, string, pageData, error) {
+func (l *Loopback) complete(ctx context.Context, exchange acquire.Exchange, q url.Values, verifier string) (*oauth2.Token, int, string, pageData, error) {
 	if errParam := q.Get("error"); errParam != "" {
 		desc := q.Get("error_description")
 		return nil, http.StatusBadRequest, "autherror",
@@ -233,11 +238,7 @@ func (l *Loopback) complete(ctx context.Context, cfg oauth2.Config, q url.Values
 			errors.New("authorization response missing code")
 	}
 
-	// Exchange the code, again including the resource parameter (RFC 8707).
-	token, err := cfg.Exchange(ctx, code,
-		oauth2.VerifierOption(verifier),
-		oauth2.SetAuthURLParam("resource", resourceURL),
-	)
+	token, err := exchange(ctx, code, verifier)
 	if err != nil {
 		return nil, http.StatusBadGateway, "autherror",
 			pageData{Title: "Authentication failed", Error: "token exchange failed", ErrorDescription: err.Error()},

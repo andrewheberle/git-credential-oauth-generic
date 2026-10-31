@@ -93,10 +93,17 @@ sequenceDiagram
    `https://idp.example.com/realms/x/.well-known/openid-configuration`. Metadata
    whose `issuer` doesn't match is rejected. Any failure at this step is reported
 5. If a refresh token is cached and a `client_id` is configured, the helper refreshes
-   the access token without opening the browser
+   the access token without opening the browser, sending the same `resource`
+   parameter (RFC 8707) as the sign-in. If the authorization server rejects
+   the refresh token (for example `invalid_grant`), it is discarded and the helper
+   continues below. If the token endpoint can't be reached, times out or fails with a
+   server error, the error is reported and the refresh token is kept, so the next Git
+   operation tries again
 6. If no `client_id` is cached in Git config, the helper registers dynamically
-   (RFC 7591) and stores the resulting `client_id` in Git config; the `client_secret`
-   returned by the server is stored securely in the OS keyring
+   (RFC 7591) and stores the resulting `client_id` in Git config. When the server
+   supports public clients (`none` in `token_endpoint_auth_methods_supported`), the
+   helper registers as one and no `client_secret` is needed. Otherwise any
+   `client_secret` returned by the server is stored securely in the OS keyring
 7. A PKCE authorization code flow is performed with a `resource` parameter (RFC 8707),
    opening the system browser and listening for the callback on localhost
 8. The resulting Bearer token is returned to Git via the `authtype=Bearer` credential

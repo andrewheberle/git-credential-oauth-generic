@@ -71,13 +71,13 @@ func (r *memRegistry) Remember(_ context.Context, resourceURL string, client acq
 // fakeAuthorizer stands in for the browser sign-in.
 type fakeAuthorizer struct {
 	mu    sync.Mutex
-	calls []oauth2.Config
+	calls []acquire.AuthorizationRequest
 }
 
-func (f *fakeAuthorizer) authorize(_ context.Context, cfg oauth2.Config, _ string) (*oauth2.Token, error) {
+func (f *fakeAuthorizer) authorize(_ context.Context, req acquire.AuthorizationRequest, _ acquire.Exchange) (*oauth2.Token, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, cfg)
+	f.calls = append(f.calls, req)
 	return &oauth2.Token{AccessToken: "signed-in-at", RefreshToken: "signed-in-rt", Expiry: time.Unix(2000000000, 0)}, nil
 }
 
@@ -243,7 +243,7 @@ func TestCommands(t *testing.T) {
 				if got := f.clients.clients[f.resource].ID; got != "registered-id" {
 					t.Errorf("registry holds client %q, want registered-id", got)
 				}
-				if len(f.authz.calls) != 1 || f.authz.calls[0].RedirectURL != "http://localhost:8400/callback" {
+				if len(f.authz.calls) != 1 || f.authz.calls[0].RedirectURI != "http://localhost:8400/callback" {
 					t.Errorf("authorizer calls = %+v, want one with the default redirect URI", f.authz.calls)
 				}
 			},
@@ -257,7 +257,7 @@ func TestCommands(t *testing.T) {
 			},
 			wantStdout: func(*fixture) string { return signedInCredential },
 			check: func(t *testing.T, f *fixture) {
-				if len(f.authz.calls) != 1 || f.authz.calls[0].RedirectURL != "http://localhost:9000/callback" {
+				if len(f.authz.calls) != 1 || f.authz.calls[0].RedirectURI != "http://localhost:9000/callback" {
 					t.Errorf("authorizer calls = %+v, want one with port 9000", f.authz.calls)
 				}
 			},
