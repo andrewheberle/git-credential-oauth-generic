@@ -1,5 +1,7 @@
 # git-credential-oauth-generic
 
+[![codecov](https://codecov.io/gh/andrewheberle/git-credential-oauth-generic/graph/badge.svg?token=RVbkvaUCAr)](https://codecov.io/gh/andrewheberle/git-credential-oauth-generic)
+
 A Git credential helper that authenticates to any OAuth-protected Git host using
 standard RFCs, with no hardcoded provider knowledge:
 
