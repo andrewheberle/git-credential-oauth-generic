@@ -60,8 +60,9 @@ sequenceDiagram
 
 - **Git 2.45 or later** - this helper uses the `authtype` Bearer token credential
   format introduced in Git 2.45. Older versions of Git cannot send Bearer tokens
-  and will not work with this helper. The helper will exit with an error if the
-  running Git version does not support this capability.
+  and will not work with this helper. If the running Git version does not
+  announce this capability, the helper prints an error and returns no credential,
+  before contacting the host or opening a browser.
 
   On Ubuntu 24.04 LTS, the system Git may be older than 2.45. Upgrade via the
   official Git maintainers PPA:
@@ -74,7 +75,9 @@ sequenceDiagram
 
 ## How it works
 
-1. Git invokes the helper with `protocol=https` and `host=<host>` on stdin
+1. Git invokes the helper with `protocol=https` and `host=<host>` on stdin. Requests
+   for any other protocol (such as `http`), or without a host, are declined
+   silently so Git can try the next credential helper
 2. If a still-valid access token is cached for the host, it is returned to Git
    straight away, without any network requests
 3. Otherwise the helper fetches `https://<host>/.well-known/oauth-protected-resource`

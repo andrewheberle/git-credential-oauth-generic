@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/tokencache"
 	"github.com/andrewheberle/simplecommand"
@@ -103,23 +102,6 @@ func Execute(ctx context.Context, args []string) error {
 	}
 
 	return nil
-}
-
-// parse reads the Git credential helper key=value input from stdin.
-func parse(input string) map[string]string {
-	lines := strings.Split(input, "\n")
-	pairs := make(map[string]string, len(lines))
-	for _, line := range lines {
-		if key, value, ok := strings.Cut(line, "="); ok {
-			_, exists := pairs[key]
-			if exists && strings.HasSuffix(key, "[]") {
-				pairs[key] += "\n" + value
-			} else {
-				pairs[key] = value
-			}
-		}
-	}
-	return pairs
 }
 
 // tokenCache stores the tokens obtained for a resource URL between runs.

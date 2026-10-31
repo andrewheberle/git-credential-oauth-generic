@@ -8,6 +8,10 @@ A Git credential helper that obtains OAuth access tokens for a Git host by disco
 `https://<host>` for the Git host being accessed; the key under which everything for that host is cached and configured.
 _Avoid_: host URL, server URL
 
+**Credential request**:
+The attributes Git sends a credential helper on stdin (protocol, host, announced capabilities). The helper only answers requests for `https` with a host, declining all others so Git tries the next helper.
+_Avoid_: input, pairs, git input
+
 **Token cache**:
 The per-Resource URL store of the access token, refresh token and expiry that the helper has obtained, kept so later Git operations can reuse or refresh them. It never holds the client secret; with `--nopersist` it stores nothing.
 _Avoid_: keychain, token store, credential store

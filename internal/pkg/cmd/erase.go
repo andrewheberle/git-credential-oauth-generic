@@ -2,11 +2,10 @@ package cmd
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"os"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/gitcredential"
 	"github.com/andrewheberle/simplecommand"
 	"github.com/bep/simplecobra"
 )
@@ -38,15 +37,11 @@ func (c *eraseCommand) PreRun(this, runner *simplecobra.Commandeer) error {
 }
 
 func (c *eraseCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
-	input, err := io.ReadAll(os.Stdin)
+	req, err := gitcredential.ReadRequest(os.Stdin)
 	if err != nil {
-		return fmt.Errorf("error reading stdin: %w", err)
+		return err
 	}
-	pairs := parse(string(input))
-	host := pairs["host"]
-	protocol := pairs["protocol"]
-	if protocol == "https" && host != "" {
-		resourceURL := fmt.Sprintf("https://%s", host)
+	if resourceURL, ok := req.ResourceURL(); ok {
 		newTokenCache(c.nopersist).Erase(ctx, resourceURL)
 		c.logger.Debug("erased cached tokens", "url", resourceURL)
 	}
