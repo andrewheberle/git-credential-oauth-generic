@@ -497,3 +497,53 @@ func TestGetDiscoveryOutcomes(t *testing.T) {
 		})
 	}
 }
+
+// A host that publishes its metadata only at the resource_metadata URL in
+// its WWW-Authenticate challenge is still found: the hint in Git's
+// wwwauth[] reaches discovery.
+func TestGetFollowsResourceMetadataHint(t *testing.T) {
+	const hintPath = "/.well-known/cloudflare-access-protected-resource/info/refs"
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case hintPath:
+			_ = json.NewEncoder(w).Encode(map[string]any{"resource": srv.URL + "/info/refs", "authorization_servers": []string{srv.URL}})
+		case "/.well-known/oauth-authorization-server":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 srv.URL,
+				"authorization_endpoint": srv.URL + "/authorize",
+				"token_endpoint":         srv.URL + "/token",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	host := strings.TrimPrefix(srv.URL, "https://")
+	clients := newMemRegistry()
+	clients.clients[srv.URL] = acquire.Client{ID: "known-id"}
+	authz := &fakeAuthorizer{}
+
+	var out, errOut bytes.Buffer
+	err := execute(context.Background(), []string{"get"}, env{
+		stdin: strings.NewReader("capability[]=authtype\nprotocol=https\nhost=" + host + "\n" +
+			`wwwauth[]=Bearer realm="OAuth", error="invalid_token", error_description="Missing or invalid access token", resource_metadata="` + srv.URL + hintPath + `"` + "\n\n"),
+		stdout:     &out,
+		stderr:     &errOut,
+		tokenCache: newMemCache(),
+		clients:    clients,
+		httpClient: srv.Client(),
+		authorize:  authz.authorize,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v (stderr %q)", err, errOut.String())
+	}
+	if out.String() != signedInCredential {
+		t.Errorf("stdout = %q, want the signed-in credential", out.String())
+	}
+	if len(authz.calls) != 1 || authz.calls[0].Resource != srv.URL {
+		t.Errorf("sign-ins = %+v, want one for the host-wide resource %q", authz.calls, srv.URL)
+	}
+}

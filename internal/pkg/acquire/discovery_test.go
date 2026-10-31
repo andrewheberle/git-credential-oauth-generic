@@ -144,7 +144,7 @@ func TestDiscovery(t *testing.T) {
 				HTTPClient:   client,
 				CallbackPort: callbackPort,
 			})
-			token, err := a.Acquire(context.Background(), srv.URL)
+			token, err := a.Acquire(context.Background(), srv.URL, "")
 
 			if tt.wantErr == nil {
 				if err != nil {

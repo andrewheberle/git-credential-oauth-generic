@@ -32,6 +32,10 @@ type Request struct {
 	Host         string
 	Capabilities []string
 
+	// WWWAuthenticate holds the WWW-Authenticate headers of the response
+	// that made Git ask for a credential (wwwauth[]), one per header.
+	WWWAuthenticate []string
+
 	// OAuthRefreshToken is the refresh token Git passes along from an earlier
 	// helper, typically git-credential-cache returning an expired credential.
 	// It is confidential and never logged.
@@ -62,6 +66,12 @@ func ReadRequest(r io.Reader) (Request, error) {
 			req.Host = value
 		case "oauth_refresh_token":
 			req.OAuthRefreshToken = value
+		case "wwwauth[]":
+			if value == "" {
+				req.WWWAuthenticate = nil
+			} else {
+				req.WWWAuthenticate = append(req.WWWAuthenticate, value)
+			}
 		case "capability[]":
 			if value == "" {
 				req.Capabilities = nil
@@ -105,6 +115,7 @@ func (r Request) LogValue() slog.Value {
 		slog.String("host", r.Host),
 		slog.Any("capabilities", r.Capabilities),
 		slog.Bool("has_refresh_token", r.OAuthRefreshToken != ""),
+		slog.String("resource_metadata", r.ResourceMetadata()),
 	)
 }
 

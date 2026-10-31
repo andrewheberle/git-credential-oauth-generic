@@ -46,7 +46,7 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 		return nil
 	}
 
-	token, err := c.newAcquirer(req.OAuthRefreshToken).Acquire(ctx, resourceURL)
+	token, err := c.newAcquirer(req.OAuthRefreshToken).Acquire(ctx, resourceURL, req.ResourceMetadata())
 	switch {
 	case errors.Is(err, acquire.ErrNotOAuthHost):
 		logger.Debug("not an OAuth host", "url", resourceURL, "error", err)

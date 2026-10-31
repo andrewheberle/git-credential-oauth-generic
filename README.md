@@ -81,7 +81,10 @@ sequenceDiagram
 2. If a still-valid access token is cached for the host, it is returned to Git
    straight away, without any network requests
 3. Otherwise the helper fetches `https://<host>/.well-known/oauth-protected-resource`
-   (RFC 9728) to discover the authorization server. If the host has no such
+   (RFC 9728) to discover the authorization server. If the host's `WWW-Authenticate`
+   challenge (which Git passes to the helper) names a `resource_metadata` URL on the
+   same host over https, that document is tried first, and the well-known document
+   is only used if it has no metadata. If the host has no such
    metadata (a 4xx, a page that isn't JSON, or no authorization server listed), it
    isn't an OAuth host and the request is declined silently. If the metadata can't
    be fetched (network error, timeout or server error), or names a different

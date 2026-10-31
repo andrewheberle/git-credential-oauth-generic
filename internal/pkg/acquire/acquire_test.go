@@ -448,7 +448,7 @@ func TestAcquire(t *testing.T) {
 				Logger:       slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})),
 			})
 
-			token, err := a.Acquire(context.Background(), resourceURL)
+			token, err := a.Acquire(context.Background(), resourceURL, "")
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
