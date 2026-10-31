@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,10 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/acquire"
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/clientregistry"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/templates"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/version"
 	"github.com/andrewheberle/opener"
@@ -58,7 +58,7 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("reading stdin: %w", err)
 	}
 	pairs := parse(string(input))
 	slog.Debug("input", "pairs", pairs)
@@ -76,122 +76,33 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 
 	resourceURL := fmt.Sprintf("https://%s", host)
 
-	// --- Step 1: check the token cache for a valid access token ---
-	cache := newTokenCache(c.nopersist)
-	token, err := cache.Load(ctx, resourceURL)
-	if err != nil {
-		c.logger.Debug("could not read token cache", "error", err)
-		token = nil
-	}
-	var refreshToken string
-	if token != nil {
-		refreshToken = token.RefreshToken
-		if token.Valid() {
-			c.logger.Debug("using cached access token")
-		} else {
-			// No usable access token; attempt refresh below.
-			c.logger.Debug("cached access token is missing or expired")
-			token = nil
-		}
-	}
+	acquirer := acquire.New(acquire.Config{
+		Cache:   newTokenCache(c.nopersist),
+		Clients: clientregistry.New(keyringService),
+		Authorize: func(ctx context.Context, cfg oauth2.Config, resourceURL string) (*oauth2.Token, error) {
+			return c.getToken(ctx, cfg, resourceURL, c.callbackport)
+		},
+		CallbackPort: c.callbackport,
+		Logger:       c.logger,
+	})
 
-	// --- Step 2: RFC 9728 / RFC 8414 discovery ---
-	asMeta, err := c.discoverAS(ctx, resourceURL)
-	if err != nil {
-		c.logger.Debug("discovery failed", "url", resourceURL, "error", err)
+	token, err := acquirer.Acquire(ctx, resourceURL)
+	switch {
+	case errors.Is(err, acquire.ErrNotOAuthHost):
+		c.logger.Debug("not an OAuth host", "url", resourceURL, "error", err)
 
 		// Host does not support RFC 9728; silently exit so Git falls through
 		// to the next credential helper.
 		return nil
-	}
-	c.logger.Debug("discovery completed",
-		"authz", asMeta.AuthorizationEndpoint,
-		"token", asMeta.TokenEndpoint,
-		"registration", asMeta.RegistrationEndpoint,
-		"scopes", asMeta.ScopesSupported,
-	)
-
-	// --- Step 3: attempt token refresh using the cached refresh token ---
-	if token == nil {
-		if refreshToken != "" {
-			c.logger.Debug("attempting token refresh")
-			refreshClientID, _ := gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-			o2c := oauth2.Config{
-				ClientID:     refreshClientID,
-				ClientSecret: getClientSecret(resourceURL),
-				Endpoint: oauth2.Endpoint{
-					TokenURL:  asMeta.TokenEndpoint,
-					AuthStyle: oauth2.AuthStyleInHeader,
-				},
-			}
-			refreshed, err := o2c.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
-			if err != nil {
-				c.logger.Debug("token refresh failed", "error", err)
-
-				// Clear the stale entry and fall through to full auth flow.
-				cache.Erase(ctx, resourceURL)
-			} else {
-				token = refreshed
-			}
-		}
+	case errors.Is(err, acquire.ErrClientIDRequired):
+		fmt.Fprintf(os.Stderr, "host %s requires a client ID but provides no registration endpoint\n", host)
+		fmt.Fprintf(os.Stderr, "set one manually: git config --global credential.%s.oauthClientId <ID>\n", resourceURL)
+		return nil
+	case err != nil:
+		return err
 	}
 
-	// --- Step 4: dynamic client registration (RFC 7591) if no client_id cached ---
-	var clientID string
-	if token == nil {
-		clientID, _ = gitConfig("--get-urlmatch", "credential.oauthClientId", resourceURL)
-		if clientID == "" {
-			if asMeta.RegistrationEndpoint == "" {
-				fmt.Fprintf(os.Stderr, "host %s requires a client ID but provides no registration endpoint\n", host)
-				fmt.Fprintf(os.Stderr, "set one manually: git config --global credential.%s.oauthClientId <ID>\n", resourceURL)
-				return nil
-			}
-			c.logger.Debug("no client_id cached, registering", "endpoint", asMeta.RegistrationEndpoint)
-
-			var clientSecret string
-			clientID, clientSecret, err = registerClient(ctx, asMeta.RegistrationEndpoint, c.callbackport)
-			if err != nil {
-				log.Fatalf("dynamic client registration failed: %v\n", err)
-			}
-			c.logger.Debug("registered client_id", "client_id", clientID)
-			if err := setGitConfig("--global", fmt.Sprintf("credential.%s.oauthClientId", resourceURL), clientID); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: could not save client_id to git config: %v\n", err)
-			}
-			if clientSecret != "" {
-				if err := setClientSecret(resourceURL, clientSecret); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not save client_secret to keyring: %v\n", err)
-				}
-			}
-		} else {
-			c.logger.Debug("using cached client_id", "client_id", clientID)
-		}
-
-		// --- Step 5: PKCE authorization code flow with RFC 8707 resource parameter ---
-		o2c := oauth2.Config{
-			ClientID:     clientID,
-			ClientSecret: getClientSecret(resourceURL),
-			Endpoint: oauth2.Endpoint{
-				AuthURL:   asMeta.AuthorizationEndpoint,
-				TokenURL:  asMeta.TokenEndpoint,
-				AuthStyle: oauth2.AuthStyleInHeader,
-			},
-			RedirectURL: fmt.Sprintf("http://localhost:%d/callback", c.callbackport),
-			Scopes:      asMeta.ScopesSupported,
-		}
-		token, err = c.getToken(ctx, o2c, resourceURL, c.callbackport)
-		if err != nil {
-			log.Fatalf("authentication failed: %v\n", err)
-		}
-	}
-
-	c.logger.Debug("got token", "token", token)
-
-	// --- Step 6: persist tokens to the token cache ---
-	if err := cache.Save(ctx, resourceURL, token); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not save tokens to keyring: %v\n", err)
-	}
-
-	// --- Step 7: output credentials for Git ---
+	// --- Output credentials for Git ---
 	// "A capability[] directive must precede any value depending on it and these
 	// directives should be the first item announced in the protocol."
 	// https://git-scm.com/docs/git-credential
@@ -366,148 +277,4 @@ func (c *getCommand) getToken(ctx context.Context, o2c oauth2.Config, resourceUR
 		}
 		return nil, ctx.Err()
 	}
-}
-
-// protectedResourceMetadata is the RFC 9728 response from
-// /.well-known/oauth-protected-resource.
-type protectedResourceMetadata struct {
-	AuthorizationServers []string `json:"authorization_servers"`
-}
-
-// authServerMetadata is the RFC 8414 response from
-// /.well-known/oauth-authorization-server.
-type authServerMetadata struct {
-	Issuer                        string   `json:"issuer"`
-	AuthorizationEndpoint         string   `json:"authorization_endpoint"`
-	TokenEndpoint                 string   `json:"token_endpoint"`
-	RegistrationEndpoint          string   `json:"registration_endpoint"`
-	ScopesSupported               []string `json:"scopes_supported"`
-	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
-}
-
-// dynamicClientResponse is the RFC 7591 registration response.
-type dynamicClientResponse struct {
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-}
-
-// fetchJSON fetches a URL and decodes the JSON response into dst.
-func fetchJSON(ctx context.Context, rawURL string, dst any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return fmt.Errorf("building request for %s: %w", rawURL, err)
-	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("fetching %s: %w", rawURL, err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, rawURL)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decoding response from %s: %w", rawURL, err)
-	}
-	return nil
-}
-
-// discoverAS performs RFC 9728 discovery against the protected resource host,
-// then fetches RFC 8414 AS metadata. Returns the metadata and the AS base URL.
-func (c *getCommand) discoverAS(ctx context.Context, resourceURL string) (*authServerMetadata, error) {
-	u, err := url.Parse(resourceURL)
-	if err != nil {
-		return nil, fmt.Errorf("parsing resource URL: %w", err)
-	}
-	// RFC 9728: fetch /.well-known/oauth-protected-resource from the resource host.
-	prMetaURL := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", u.Scheme, u.Host)
-	c.logger.Debug("fetching protected resource metadata", "url", prMetaURL)
-	var prMeta protectedResourceMetadata
-	if err := fetchJSON(ctx, prMetaURL, &prMeta); err != nil {
-		return nil, fmt.Errorf("RFC 9728 discovery failed: %w", err)
-	}
-	if len(prMeta.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("no authorization_servers in protected resource metadata")
-	}
-	// Use the first authorization server.
-	asBase := prMeta.AuthorizationServers[0]
-	c.logger.Debug("authorization server", "url", asBase)
-	// RFC 8414: fetch /.well-known/oauth-authorization-server from the AS.
-	asParsed, err := url.Parse(asBase)
-	if err != nil {
-		return nil, fmt.Errorf("parsing AS URL: %w", err)
-	}
-	asMetaURL := fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server", asParsed.Scheme, asParsed.Host)
-	c.logger.Debug("fetching AS metadata", "url", asMetaURL)
-	var asMeta authServerMetadata
-	if err := fetchJSON(ctx, asMetaURL, &asMeta); err != nil {
-		return nil, fmt.Errorf("RFC 8414 AS metadata fetch failed: %w", err)
-	}
-	return &asMeta, nil
-}
-
-// registerClient performs RFC 7591 dynamic client registration against the
-// given registration endpoint, requesting a localhost redirect URI on the
-// given port.
-func registerClient(ctx context.Context, registrationEndpoint string, callbackPort int) (clientID, clientSecret string, err error) {
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", callbackPort)
-	body, err := json.Marshal(map[string]any{
-		"redirect_uris": []string{redirectURI},
-		"client_name":   "git-credential-oauth-generic",
-		"grant_types":   []string{"authorization_code", "refresh_token"},
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("encoding registration request: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, registrationEndpoint, strings.NewReader(string(body)))
-	if err != nil {
-		return "", "", fmt.Errorf("building registration request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("registration request: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("registration failed (status %d): %s", resp.StatusCode, string(b))
-	}
-	var result dynamicClientResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("decoding registration response: %w", err)
-	}
-	if result.ClientID == "" {
-		return "", "", fmt.Errorf("registration response missing client_id")
-	}
-	return result.ClientID, result.ClientSecret, nil
-}
-
-// gitConfig runs "git config <args>" and returns trimmed output.
-func gitConfig(args ...string) (string, error) {
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		return "", err
-	}
-	out, err := exec.Command(gitPath, append([]string{"config"}, args...)...).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// setGitConfig runs "git config <args>" discarding output.
-func setGitConfig(args ...string) error {
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(gitPath, append([]string{"config"}, args...)...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }

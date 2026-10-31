@@ -10,7 +10,6 @@ import (
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/tokencache"
 	"github.com/andrewheberle/simplecommand"
 	"github.com/bep/simplecobra"
-	"github.com/zalando/go-keyring"
 	"golang.org/x/oauth2"
 )
 
@@ -137,20 +136,4 @@ func newTokenCache(nopersist bool) tokenCache {
 		return tokencache.NewNoop()
 	}
 	return tokencache.NewKeyring(keyringService)
-}
-
-// getClientSecret retrieves the client secret from the OS keyring for the
-// given resource URL. Returns empty string if not found.
-func getClientSecret(resourceURL string) string {
-	value, err := keyring.Get(keyringService, resourceURL+":client_secret")
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
-// setClientSecret stores the client secret in the OS keyring for the given
-// resource URL.
-func setClientSecret(resourceURL, secret string) error {
-	return keyring.Set(keyringService, resourceURL+":client_secret", secret)
 }
