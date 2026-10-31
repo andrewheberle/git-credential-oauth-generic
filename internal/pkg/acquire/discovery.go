@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // protectedResourceMetadata is the RFC 9728 response from
 // /.well-known/oauth-protected-resource.
 type protectedResourceMetadata struct {
+	Resource             string   `json:"resource"`
 	AuthorizationServers []string `json:"authorization_servers"`
 }
 
@@ -35,10 +38,17 @@ type dynamicClientResponse struct {
 
 // discover performs RFC 9728 discovery against the protected resource host,
 // then fetches RFC 8414 metadata from the first authorization server it names.
+//
+// Whether the host is an OAuth host at all is decided by the first step
+// only: a 4xx, a response that isn't JSON, or metadata naming no
+// authorization server mean it isn't (ErrNotOAuthHost), since this helper is
+// usually configured for every host. Network errors, timeouts and 5xx there,
+// and any failure once the host has said it is OAuth-protected, are
+// ErrDiscovery.
 func (a *Acquirer) discover(ctx context.Context, resourceURL string) (*authServerMetadata, error) {
 	u, err := url.Parse(resourceURL)
 	if err != nil {
-		return nil, fmt.Errorf("parsing resource URL: %w", err)
+		return nil, fmt.Errorf("%w: parsing resource URL: %w", ErrDiscovery, err)
 	}
 
 	// RFC 9728: fetch /.well-known/oauth-protected-resource from the resource host.
@@ -46,28 +56,87 @@ func (a *Acquirer) discover(ctx context.Context, resourceURL string) (*authServe
 	a.logger.Debug("fetching protected resource metadata", "url", prMetaURL)
 	var prMeta protectedResourceMetadata
 	if err := a.fetchJSON(ctx, prMetaURL, &prMeta); err != nil {
-		return nil, fmt.Errorf("RFC 9728 discovery: %w", err)
+		if hostIsNotOAuth(err) {
+			return nil, fmt.Errorf("%w: %w", ErrNotOAuthHost, err)
+		}
+		return nil, fmt.Errorf("%w: protected resource metadata: %w", ErrDiscovery, err)
 	}
 	if len(prMeta.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("no authorization_servers in protected resource metadata")
+		return nil, fmt.Errorf("%w: no authorization_servers in protected resource metadata", ErrNotOAuthHost)
+	}
+
+	// RFC 9728 §3.3: the metadata must be for this resource. A missing
+	// resource is tolerated; a trailing slash is not a difference.
+	if prMeta.Resource != "" && !sameURL(prMeta.Resource, resourceURL) {
+		return nil, fmt.Errorf("%w: protected resource metadata is for %q, not %q", ErrDiscovery, prMeta.Resource, resourceURL)
 	}
 
 	// Use the first authorization server.
-	asBase := prMeta.AuthorizationServers[0]
-	a.logger.Debug("authorization server", "url", asBase)
+	issuer := prMeta.AuthorizationServers[0]
+	a.logger.Debug("authorization server", "url", issuer)
 
-	// RFC 8414: fetch /.well-known/oauth-authorization-server from the AS.
-	asParsed, err := url.Parse(asBase)
+	asMeta, err := a.authServerMetadata(ctx, issuer)
 	if err != nil {
-		return nil, fmt.Errorf("parsing authorization server URL: %w", err)
+		return nil, fmt.Errorf("%w: authorization server metadata: %w", ErrDiscovery, err)
 	}
-	asMetaURL := fmt.Sprintf("%s://%s/.well-known/oauth-authorization-server", asParsed.Scheme, asParsed.Host)
-	a.logger.Debug("fetching authorization server metadata", "url", asMetaURL)
-	var asMeta authServerMetadata
-	if err := a.fetchJSON(ctx, asMetaURL, &asMeta); err != nil {
-		return nil, fmt.Errorf("RFC 8414 metadata: %w", err)
+
+	// RFC 8414 §3.3: the metadata must be for the issuer it was fetched for.
+	if !sameURL(asMeta.Issuer, issuer) {
+		return nil, fmt.Errorf("%w: authorization server metadata is for issuer %q, not %q", ErrDiscovery, asMeta.Issuer, issuer)
 	}
-	return &asMeta, nil
+
+	return asMeta, nil
+}
+
+// authServerMetadata fetches the RFC 8414 metadata for issuer. The well-known
+// path goes between the host and any path of the issuer (RFC 8414 §3.1). For
+// an issuer with a path that has no such document, OpenID Connect discovery
+// (path appended) is tried, which is where several identity providers
+// publish the same metadata.
+func (a *Acquirer) authServerMetadata(ctx context.Context, issuer string) (*authServerMetadata, error) {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("invalid authorization server URL %q", issuer)
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	origin := u.Scheme + "://" + u.Host
+
+	var meta authServerMetadata
+	metaURL := origin + "/.well-known/oauth-authorization-server" + path
+	a.logger.Debug("fetching authorization server metadata", "url", metaURL)
+	err = a.fetchJSON(ctx, metaURL, &meta)
+	if err == nil {
+		return &meta, nil
+	}
+
+	var se *statusError
+	if path == "" || !errors.As(err, &se) || se.code != http.StatusNotFound {
+		return nil, err
+	}
+
+	oidcURL := origin + path + "/.well-known/openid-configuration"
+	a.logger.Debug("no RFC 8414 metadata; trying OpenID Connect discovery", "url", oidcURL)
+	if err := a.fetchJSON(ctx, oidcURL, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
+// hostIsNotOAuth reports whether a failure fetching protected resource
+// metadata means the host simply doesn't offer it: a client error status, or
+// a response that isn't the expected JSON.
+func hostIsNotOAuth(err error) bool {
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.code < http.StatusInternalServerError
+	}
+	var de *decodeError
+	return errors.As(err, &de)
+}
+
+// sameURL compares two URLs as written, ignoring a trailing slash.
+func sameURL(a, b string) bool {
+	return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/")
 }
 
 // register performs RFC 7591 dynamic client registration, requesting the
@@ -123,10 +192,32 @@ func (a *Acquirer) fetchJSON(ctx context.Context, rawURL string, dst any) error 
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, rawURL)
+		return &statusError{url: rawURL, code: resp.StatusCode}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(dst); err != nil {
-		return fmt.Errorf("decoding response from %s: %w", rawURL, err)
+		return &decodeError{url: rawURL, err: err}
 	}
 	return nil
 }
+
+// statusError is a metadata response with a status other than 200.
+type statusError struct {
+	url  string
+	code int
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("unexpected status %d from %s", e.code, e.url)
+}
+
+// decodeError is a metadata response that isn't the expected JSON.
+type decodeError struct {
+	url string
+	err error
+}
+
+func (e *decodeError) Error() string {
+	return fmt.Sprintf("decoding response from %s: %v", e.url, e.err)
+}
+
+func (e *decodeError) Unwrap() error { return e.err }

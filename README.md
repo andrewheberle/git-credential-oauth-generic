@@ -81,8 +81,17 @@ sequenceDiagram
 2. If a still-valid access token is cached for the host, it is returned to Git
    straight away, without any network requests
 3. Otherwise the helper fetches `https://<host>/.well-known/oauth-protected-resource`
-   (RFC 9728) to discover the authorization server
-4. The AS metadata is fetched (RFC 8414) to obtain endpoints and supported scopes
+   (RFC 9728) to discover the authorization server. If the host has no such
+   metadata (a 4xx, a page that isn't JSON, or no authorization server listed), it
+   isn't an OAuth host and the request is declined silently. If the metadata can't
+   be fetched (network error, timeout or server error), or names a different
+   resource, the failure is reported
+4. The AS metadata is fetched (RFC 8414) to obtain endpoints and supported scopes.
+   For an issuer with a path (such as `https://idp.example.com/realms/x`) it is read
+   from `https://idp.example.com/.well-known/oauth-authorization-server/realms/x`,
+   falling back to OpenID Connect discovery at
+   `https://idp.example.com/realms/x/.well-known/openid-configuration`. Metadata
+   whose `issuer` doesn't match is rejected. Any failure at this step is reported
 5. If a refresh token is cached and a `client_id` is configured, the helper refreshes
    the access token without opening the browser
 6. If no `client_id` is cached in Git config, the helper registers dynamically

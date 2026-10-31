@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,6 +108,7 @@ func newAuthServer(t *testing.T) (srv *httptest.Server, hits, tokenHits, registr
 			_ = json.NewEncoder(w).Encode(map[string]any{"authorization_servers": []string{srv.URL}})
 		case "/.well-known/oauth-authorization-server":
 			_ = json.NewEncoder(w).Encode(map[string]any{
+				"issuer":                 srv.URL,
 				"authorization_endpoint": srv.URL + "/authorize",
 				"token_endpoint":         srv.URL + "/token",
 				"registration_endpoint":  srv.URL + "/register",
@@ -437,5 +439,61 @@ func assertCacheKept(t *testing.T, f *fixture) {
 	t.Helper()
 	if _, ok := f.cache.tokens[f.resource]; !ok {
 		t.Error("cached token was erased")
+	}
+}
+
+func TestGetDiscoveryOutcomes(t *testing.T) {
+	tests := []struct {
+		name string
+		// asMeta is the status of the authorization server metadata; the
+		// protected resource metadata is served only when it is non-zero.
+		asMeta  int
+		wantErr error
+	}{
+		{name: "non-OAuth host is declined silently", asMeta: 0},
+		{name: "authorization server outage is reported", asMeta: http.StatusServiceUnavailable, wantErr: acquire.ErrDiscovery},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var srv *httptest.Server
+			srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case tt.asMeta != 0 && r.URL.Path == "/.well-known/oauth-protected-resource":
+					_ = json.NewEncoder(w).Encode(map[string]any{"resource": srv.URL, "authorization_servers": []string{srv.URL}})
+				case tt.asMeta != 0 && r.URL.Path == "/.well-known/oauth-authorization-server":
+					w.WriteHeader(tt.asMeta)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			authz := &fakeAuthorizer{}
+			var out, errOut bytes.Buffer
+			err := execute(context.Background(), []string{"get"}, env{
+				stdin:      strings.NewReader("capability[]=authtype\nprotocol=https\nhost=" + strings.TrimPrefix(srv.URL, "https://") + "\n\n"),
+				stdout:     &out,
+				stderr:     &errOut,
+				tokenCache: newMemCache(),
+				clients:    newMemRegistry(),
+				httpClient: srv.Client(),
+				authorize:  authz.authorize,
+			})
+
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("execute error = %v, want a silent decline", err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("execute error = %v, want %v", err, tt.wantErr)
+			}
+			if out.Len() != 0 || len(authz.calls) != 0 {
+				t.Errorf("stdout %q, %d sign-ins; want no credential and no sign-in", out.String(), len(authz.calls))
+			}
+			if tt.wantErr == nil && errOut.Len() != 0 {
+				t.Errorf("stderr %q, want nothing for a non-OAuth host", errOut.String())
+			}
+		})
 	}
 }
