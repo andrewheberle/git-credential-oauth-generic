@@ -20,7 +20,7 @@ func (c *eraseCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args
 		return err
 	}
 	if resourceURL, ok := req.ResourceURL(); ok {
-		c.root.cache().Erase(ctx, resourceURL)
+		c.root.cache("").Erase(ctx, resourceURL)
 		c.root.logger.Debug("erased cached tokens", "url", resourceURL)
 	}
 	return nil

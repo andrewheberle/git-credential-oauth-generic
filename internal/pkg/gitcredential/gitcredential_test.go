@@ -44,6 +44,11 @@ func TestReadRequest(t *testing.T) {
 			want:  Request{Protocol: "https", Host: "git.example.com:8443"},
 		},
 		{
+			name:  "refresh token passed along by an earlier helper",
+			input: "capability[]=authtype\nprotocol=https\nhost=git.example.com\noauth_refresh_token=rt\n",
+			want:  Request{Protocol: "https", Host: "git.example.com", Capabilities: []string{"authtype"}, OAuthRefreshToken: "rt"},
+		},
+		{
 			name:  "values may contain =",
 			input: "host=a=b\n",
 			want:  Request{Host: "a=b"},

@@ -13,7 +13,7 @@ The attributes Git sends a credential helper on stdin (protocol, host, announced
 _Avoid_: input, pairs, git input
 
 **Token cache**:
-The per-Resource URL store of the access token, refresh token and expiry that the helper has obtained, kept so later Git operations can reuse or refresh them. It never holds the client secret; with `--nopersist` it stores nothing.
+The per-Resource URL store of the access token, refresh token and expiry that the helper has obtained, kept so later Git operations can reuse or refresh them. It never holds the client secret; with `--nopersist` it holds only the refresh token Git passed back in the Credential request, and stores nothing.
 _Avoid_: keychain, token store, credential store
 
 **Registered client**:

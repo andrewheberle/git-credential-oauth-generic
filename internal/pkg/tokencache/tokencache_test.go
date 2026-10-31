@@ -159,24 +159,39 @@ func TestKeyringErrors(t *testing.T) {
 	})
 }
 
-func TestNoop(t *testing.T) {
-	keyring.MockInit()
+func TestRefreshOnly(t *testing.T) {
 	ctx := context.Background()
-	c := NewNoop()
 
-	if err := c.Save(ctx, testResource, &oauth2.Token{AccessToken: "at", RefreshToken: "rt", Expiry: testExpiry}); err != nil {
-		t.Fatalf("Save: %v", err)
+	tests := []struct {
+		name         string
+		refreshToken string
+		want         *oauth2.Token
+	}{
+		{name: "refresh token from the request", refreshToken: "rt", want: &oauth2.Token{RefreshToken: "rt"}},
+		{name: "no refresh token", refreshToken: "", want: nil},
 	}
-	got, err := c.Load(ctx, testResource)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	assertToken(t, got, nil)
-	c.Erase(ctx, testResource)
 
-	// Nothing may reach the OS keyring.
-	if _, err := keyring.Get(testService, testResource+":access_token"); !errors.Is(err, keyring.ErrNotFound) {
-		t.Errorf("Noop wrote to the keyring: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			c := NewRefreshOnly(tt.refreshToken)
+
+			// Saves and erases are ignored and never reach the OS keyring.
+			if err := c.Save(ctx, testResource, &oauth2.Token{AccessToken: "at", RefreshToken: "new-rt", Expiry: testExpiry}); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			c.Erase(ctx, testResource)
+
+			got, err := c.Load(ctx, testResource)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			assertToken(t, got, tt.want)
+
+			if _, err := keyring.Get(testService, testResource+":access_token"); !errors.Is(err, keyring.ErrNotFound) {
+				t.Errorf("RefreshOnly wrote to the keyring: %v", err)
+			}
+		})
 	}
 }
 

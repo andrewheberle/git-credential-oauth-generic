@@ -45,7 +45,7 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 		return nil
 	}
 
-	token, err := c.newAcquirer().Acquire(ctx, resourceURL)
+	token, err := c.newAcquirer(req.OAuthRefreshToken).Acquire(ctx, resourceURL)
 	switch {
 	case errors.Is(err, acquire.ErrNotOAuthHost):
 		logger.Debug("not an OAuth host", "url", resourceURL, "error", err)
@@ -73,8 +73,9 @@ func (c *getCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args [
 }
 
 // newAcquirer assembles Credential acquisition for this run from the
-// environment and flags.
-func (c *getCommand) newAcquirer() *acquire.Acquirer {
+// environment and flags. refreshToken is the one Git passed in the request;
+// it is only used with --nopersist.
+func (c *getCommand) newAcquirer(refreshToken string) *acquire.Acquirer {
 	e, logger := c.root.env, c.root.logger
 
 	authz := e.authorize
@@ -83,7 +84,7 @@ func (c *getCommand) newAcquirer() *acquire.Acquirer {
 	}
 
 	return acquire.New(acquire.Config{
-		Cache:        c.root.cache(),
+		Cache:        c.root.cache(refreshToken),
 		Clients:      e.clients,
 		Authorize:    authz,
 		HTTPClient:   e.httpClient,
