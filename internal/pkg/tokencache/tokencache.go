@@ -140,20 +140,33 @@ func key(resourceURL, item string) string {
 	return resourceURL + ":" + item
 }
 
-// Noop is a Token cache that stores nothing. It is used with --nopersist,
-// where a chained Git credential helper is responsible for persistence.
-type Noop struct{}
-
-// NewNoop returns a Token cache that stores nothing.
-func NewNoop() Noop {
-	return Noop{}
+// RefreshOnly is the Token cache used with --nopersist, where a chained Git
+// credential helper (git-credential-cache) persists the credential instead.
+// It holds only the refresh token Git passed back in the Credential request,
+// so an expired credential can be refreshed without a browser sign-in, and
+// stores nothing.
+type RefreshOnly struct {
+	refreshToken string
 }
 
-// Load always reports that nothing is cached.
-func (Noop) Load(context.Context, string) (*oauth2.Token, error) { return nil, nil }
+// NewRefreshOnly returns a Token cache holding refreshToken, which may be
+// empty.
+func NewRefreshOnly(refreshToken string) RefreshOnly {
+	return RefreshOnly{refreshToken: refreshToken}
+}
 
-// Save discards the token.
-func (Noop) Save(context.Context, string, *oauth2.Token) error { return nil }
+// Load returns a token with only the refresh token set, or nil if there is
+// none. It is the same for every resource URL: a request carries the refresh
+// token for its own resource only.
+func (c RefreshOnly) Load(context.Context, string) (*oauth2.Token, error) {
+	if c.refreshToken == "" {
+		return nil, nil
+	}
+	return &oauth2.Token{RefreshToken: c.refreshToken}, nil
+}
 
-// Erase does nothing.
-func (Noop) Erase(context.Context, string) {}
+// Save discards the token; the chained helper stores what Git is given.
+func (RefreshOnly) Save(context.Context, string, *oauth2.Token) error { return nil }
+
+// Erase does nothing; the chained helper erases its own entry.
+func (RefreshOnly) Erase(context.Context, string) {}

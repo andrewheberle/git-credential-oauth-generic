@@ -25,12 +25,17 @@ const CapabilityAuthtype = "authtype"
 const maxLineLength = 1 << 20
 
 // Request is a Credential request: the attributes Git sends a helper. Only
-// the attributes this helper uses are kept; secrets Git may pass along (such
-// as a password from another helper) are never stored.
+// the attributes this helper uses are kept; other secrets Git may pass along
+// (such as a password from another helper) are never stored.
 type Request struct {
 	Protocol     string
 	Host         string
 	Capabilities []string
+
+	// OAuthRefreshToken is the refresh token Git passes along from an earlier
+	// helper, typically git-credential-cache returning an expired credential.
+	// It is confidential and never logged.
+	OAuthRefreshToken string
 }
 
 // ReadRequest reads a Credential request. Following the protocol, it stops at
@@ -55,6 +60,8 @@ func ReadRequest(r io.Reader) (Request, error) {
 			req.Protocol = value
 		case "host":
 			req.Host = value
+		case "oauth_refresh_token":
+			req.OAuthRefreshToken = value
 		case "capability[]":
 			if value == "" {
 				req.Capabilities = nil
@@ -90,12 +97,14 @@ func (r Request) Supports(capability string) bool {
 	return false
 }
 
-// LogValue logs the request without any secret attributes.
+// LogValue logs the request without any secret attributes, reporting only
+// whether a refresh token was passed.
 func (r Request) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("protocol", r.Protocol),
 		slog.String("host", r.Host),
 		slog.Any("capabilities", r.Capabilities),
+		slog.Bool("has_refresh_token", r.OAuthRefreshToken != ""),
 	)
 }
 

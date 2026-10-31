@@ -152,12 +152,13 @@ func (c *rootCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args 
 	return errors.New("please run a sub-command")
 }
 
-// cache returns the Token cache for this run: the persistent one, or one that
-// stores nothing when a chained Git credential helper handles persistence
-// (--nopersist).
-func (c *rootCommand) cache() tokenCache {
+// cache returns the Token cache for this run: the persistent one, or, when a
+// chained Git credential helper handles persistence (--nopersist), one that
+// holds only the refresh token Git passed back in the request (if any) and
+// stores nothing.
+func (c *rootCommand) cache(refreshToken string) tokenCache {
 	if c.nopersist {
-		return tokencache.NewNoop()
+		return tokencache.NewRefreshOnly(refreshToken)
 	}
 	return c.env.tokenCache
 }

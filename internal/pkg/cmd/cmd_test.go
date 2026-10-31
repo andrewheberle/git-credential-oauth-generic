@@ -80,19 +80,23 @@ func (f *fakeAuthorizer) authorize(_ context.Context, cfg oauth2.Config, _ strin
 	return &oauth2.Token{AccessToken: "signed-in-at", RefreshToken: "signed-in-rt", Expiry: time.Unix(2000000000, 0)}, nil
 }
 
+// gitRefreshToken is the refresh token the fake authorization server accepts.
+const gitRefreshToken = "git-rt"
+
 // newAuthServer is an httptest TLS server that is both the Git host and its
 // authorization server, so a request for host=<its host> discovers itself.
-// It counts every request it receives.
-func newAuthServer(t *testing.T) (*httptest.Server, *int) {
+// It counts every request it receives, and token endpoint requests
+// separately. Its token endpoint only accepts refreshes of gitRefreshToken.
+func newAuthServer(t *testing.T) (srv *httptest.Server, hits, tokenHits *int) {
 	t.Helper()
-	var (
-		mu   sync.Mutex
-		hits int
-	)
-	var srv *httptest.Server
+	var mu sync.Mutex
+	hits, tokenHits = new(int), new(int)
 	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		hits++
+		*hits++
+		if r.URL.Path == "/token" {
+			*tokenHits++
+		}
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -107,31 +111,43 @@ func newAuthServer(t *testing.T) (*httptest.Server, *int) {
 		case "/register":
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{"client_id": "registered-id"})
+		case "/token":
+			_ = r.ParseForm()
+			if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != gitRefreshToken {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "invalid_grant"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "refreshed-at", "token_type": "Bearer", "expires_in": 3600, "refresh_token": "refreshed-rt",
+			})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &hits
+	return srv, hits, tokenHits
 }
 
 // fixture is one run's environment plus the fakes behind it.
 type fixture struct {
-	srv      *httptest.Server
-	hits     *int
-	host     string // the server's host, as Git would send it
-	resource string // its Resource URL
-	cache    *memCache
-	clients  *memRegistry
-	authz    *fakeAuthorizer
+	srv       *httptest.Server
+	hits      *int
+	tokenHits *int
+	stdout    string // the last run's stdout
+	host      string // the server's host, as Git would send it
+	resource  string // its Resource URL
+	cache     *memCache
+	clients   *memRegistry
+	authz     *fakeAuthorizer
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	srv, hits := newAuthServer(t)
+	srv, hits, tokenHits := newAuthServer(t)
 	host := strings.TrimPrefix(srv.URL, "https://")
 	return &fixture{
-		srv: srv, hits: hits, host: host, resource: "https://" + host,
+		srv: srv, hits: hits, tokenHits: tokenHits, host: host, resource: "https://" + host,
 		cache: newMemCache(), clients: newMemRegistry(), authz: &fakeAuthorizer{},
 	}
 }
@@ -149,7 +165,14 @@ func (f *fixture) run(t *testing.T, args []string, stdin string) (stdout, stderr
 		httpClient: f.srv.Client(),
 		authorize:  f.authz.authorize,
 	})
+	f.stdout = out.String()
 	return out.String(), errOut.String(), err
+}
+
+// withRefreshToken adds the oauth_refresh_token an earlier helper (such as
+// git-credential-cache returning an expired credential) passes along.
+func withRefreshToken(request, refreshToken string) string {
+	return strings.TrimSuffix(request, "\n") + "oauth_refresh_token=" + refreshToken + "\n\n"
 }
 
 func (f *fixture) request(protocol string, capabilities ...string) string {
@@ -241,6 +264,62 @@ func TestCommands(t *testing.T) {
 			check: func(t *testing.T, f *fixture) {
 				if f.cache.loads != 0 || f.cache.saves != 0 {
 					t.Errorf("cache loads=%d saves=%d, want 0 and 0", f.cache.loads, f.cache.saves)
+				}
+			},
+		},
+		{
+			// #46
+			name:  "--nopersist refreshes with the token Git passed back",
+			args:  []string{"--nopersist", "get"},
+			stdin: func(f *fixture) string { return withRefreshToken(f.request("https", "authtype"), gitRefreshToken) },
+			setup: func(f *fixture) { f.clients.clients[f.resource] = acquire.Client{ID: "known-id"} },
+			wantStdout: func(*fixture) string {
+				return "capability[]=authtype\nauthtype=Bearer\ncredential=refreshed-at\npassword_expiry_utc="
+			},
+			check: func(t *testing.T, f *fixture) {
+				if !strings.HasSuffix(f.stdout, "\noauth_refresh_token=refreshed-rt\n") {
+					t.Errorf("stdout %q does not hand the new refresh token back to Git", f.stdout)
+				}
+				if len(f.authz.calls) != 0 {
+					t.Errorf("signed in %d times, want 0", len(f.authz.calls))
+				}
+				if f.cache.loads != 0 || f.cache.saves != 0 {
+					t.Errorf("persistent cache loads=%d saves=%d, want 0 and 0", f.cache.loads, f.cache.saves)
+				}
+			},
+		},
+		{
+			name:       "--nopersist signs in when the passed-back refresh token is rejected",
+			args:       []string{"--nopersist", "get"},
+			stdin:      func(f *fixture) string { return withRefreshToken(f.request("https", "authtype"), "revoked-rt") },
+			setup:      func(f *fixture) { f.clients.clients[f.resource] = acquire.Client{ID: "known-id"} },
+			wantStdout: func(*fixture) string { return signedInCredential },
+			check: func(t *testing.T, f *fixture) {
+				if *f.tokenHits != 1 || len(f.authz.calls) != 1 {
+					t.Errorf("token endpoint hits=%d sign-ins=%d, want 1 and 1", *f.tokenHits, len(f.authz.calls))
+				}
+			},
+		},
+		{
+			name:       "--nopersist signs in when no client is registered to refresh with",
+			args:       []string{"--nopersist", "get"},
+			stdin:      func(f *fixture) string { return withRefreshToken(f.request("https", "authtype"), gitRefreshToken) },
+			wantStdout: func(*fixture) string { return signedInCredential },
+			check: func(t *testing.T, f *fixture) {
+				if *f.tokenHits != 0 || len(f.authz.calls) != 1 {
+					t.Errorf("token endpoint hits=%d sign-ins=%d, want 0 and 1", *f.tokenHits, len(f.authz.calls))
+				}
+			},
+		},
+		{
+			name:       "without --nopersist a passed-back refresh token is ignored",
+			args:       []string{"get"},
+			stdin:      func(f *fixture) string { return withRefreshToken(f.request("https", "authtype"), gitRefreshToken) },
+			setup:      func(f *fixture) { f.clients.clients[f.resource] = acquire.Client{ID: "known-id"} },
+			wantStdout: func(*fixture) string { return signedInCredential },
+			check: func(t *testing.T, f *fixture) {
+				if *f.tokenHits != 0 || len(f.authz.calls) != 1 {
+					t.Errorf("token endpoint hits=%d sign-ins=%d, want 0 and 1", *f.tokenHits, len(f.authz.calls))
 				}
 			},
 		},

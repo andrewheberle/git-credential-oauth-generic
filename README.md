@@ -143,6 +143,15 @@ git config --global --add credential.helper "oauth-generic --nopersist"
 On Windows the `wincred` and `manager` (GCM) helpers do not correctly store the
 credentials output by `oauth-generic` based on testing so far.
 
+With `--nopersist`, the storage helper keeps the access token and its refresh
+token. When the access token expires, Git passes the stored refresh token to
+`oauth-generic`, which uses it to get a new access token without opening the
+browser. The new tokens are handed back to Git for the storage helper to keep.
+This needs a storage helper that can hold Bearer credentials (Git's `authtype`
+capability); of the helpers that ship with Git, only `cache` does. If the cache
+entry has been evicted (for example after its `--timeout`), the next Git
+operation signs in through the browser again.
+
 ### Callback port
 
 The default callback port is `8400`, matching Cloudflare Access's expected
