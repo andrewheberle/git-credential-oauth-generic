@@ -39,14 +39,19 @@ type TokenCache interface {
 }
 
 // Client is a Registered client: the OAuth client this helper is known as to
-// an authorization server. Secret is empty for public clients.
+// an authorization server. Secret is empty for public clients. RedirectURI is
+// the redirect URI it was registered with; it is empty for a client ID set by
+// hand or registered by an earlier version.
 type Client struct {
-	ID     string
-	Secret string
+	ID          string
+	Secret      string
+	RedirectURI string
 }
 
 // ClientRegistry stores the Registered client for a resource URL. Lookup
-// returns a zero Client when none is registered.
+// returns a zero Client when none is registered, and an error only when the
+// store cannot be read, in which case Credential acquisition stops rather than
+// registering a replacement.
 type ClientRegistry interface {
 	Lookup(ctx context.Context, resourceURL string) (Client, error)
 	Remember(ctx context.Context, resourceURL string, client Client) error
@@ -145,8 +150,7 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 
 	client, err := a.clients.Lookup(ctx, resourceURL)
 	if err != nil {
-		a.logger.Debug("could not look up registered client", "error", err)
-		client = Client{}
+		return nil, fmt.Errorf("looking up registered client: %w", err)
 	}
 
 	if cached != nil && cached.RefreshToken != "" && client.ID != "" {
@@ -160,11 +164,11 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 		a.cache.Erase(ctx, resourceURL)
 	}
 
-	if client.ID == "" {
+	if a.needsRegistration(client, meta) {
 		if meta.RegistrationEndpoint == "" {
 			return nil, ErrClientIDRequired
 		}
-		a.logger.Debug("no registered client, registering", "endpoint", meta.RegistrationEndpoint)
+		a.logger.Debug("registering client", "endpoint", meta.RegistrationEndpoint)
 		client, err = a.register(ctx, meta.RegistrationEndpoint)
 		if err != nil {
 			return nil, fmt.Errorf("dynamic client registration: %w", err)
@@ -194,6 +198,28 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 
 	a.save(ctx, resourceURL, token)
 	return token, nil
+}
+
+// needsRegistration reports whether a new client must be registered: when none
+// is registered, or when the registered one was registered with a different
+// redirect URI (the callback port changed) and the server can register a new
+// one. A client with no recorded redirect URI (set by hand, or registered by
+// an earlier version) is never replaced.
+func (a *Acquirer) needsRegistration(client Client, meta *authServerMetadata) bool {
+	if client.ID == "" {
+		return true
+	}
+	if client.RedirectURI == "" || client.RedirectURI == a.redirectURL() {
+		return false
+	}
+	if meta.RegistrationEndpoint == "" {
+		a.logger.Warn("registered client was registered with a different redirect URI and the server offers no registration; sign-in may fail",
+			"registered", client.RedirectURI, "current", a.redirectURL())
+		return false
+	}
+	a.logger.Debug("callback redirect URI changed; registering a new client",
+		"registered", client.RedirectURI, "current", a.redirectURL())
+	return true
 }
 
 // refresh exchanges refreshToken for a new token at the token endpoint.

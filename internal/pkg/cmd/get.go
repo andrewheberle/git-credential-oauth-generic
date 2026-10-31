@@ -7,6 +7,7 @@ import (
 
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/acquire"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/authorize"
+	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/clientregistry"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/gitcredential"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/version"
 	"github.com/andrewheberle/simplecommand"
@@ -82,10 +83,14 @@ func (c *getCommand) newAcquirer(refreshToken string) *acquire.Acquirer {
 	if authz == nil {
 		authz = (&authorize.Loopback{Out: e.stderr, Logger: logger}).Authorize
 	}
+	clients := e.clients
+	if clients == nil {
+		clients = clientregistry.New(keyringService, logger)
+	}
 
 	return acquire.New(acquire.Config{
 		Cache:        c.root.cache(refreshToken),
-		Clients:      e.clients,
+		Clients:      clients,
 		Authorize:    authz,
 		HTTPClient:   e.httpClient,
 		CallbackPort: c.root.callbackport,

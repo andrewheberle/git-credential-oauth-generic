@@ -10,7 +10,6 @@ import (
 	"os"
 
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/acquire"
-	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/clientregistry"
 	"github.com/andrewheberle/git-credential-oauth-generic/internal/pkg/tokencache"
 	"github.com/andrewheberle/simplecommand"
 	"github.com/bep/simplecobra"
@@ -39,7 +38,10 @@ type env struct {
 	// tokenCache is the persistent Token cache; --nopersist replaces it with
 	// one that stores nothing.
 	tokenCache tokenCache
-	clients    acquire.ClientRegistry
+
+	// clients is the client registry; nil means the Git config and keyring
+	// registry, built with the run's logger.
+	clients acquire.ClientRegistry
 
 	// httpClient is used for discovery, registration and refresh; nil means
 	// Credential acquisition's default.
@@ -58,7 +60,6 @@ func Execute(ctx context.Context, args []string) error {
 		stdout:     os.Stdout,
 		stderr:     os.Stderr,
 		tokenCache: tokencache.NewKeyring(keyringService),
-		clients:    clientregistry.New(keyringService),
 	})
 }
 

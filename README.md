@@ -159,15 +159,26 @@ git config --global --add credential.helper "oauth-generic --port 9000"
 
 ## Credential storage
 
-The dynamically registered `client_id` is stored in Git config:
+The dynamically registered `client_id`, and the redirect URI it was registered
+with, are stored in Git config:
 
 ```
 credential.https://git.example.com.oauthClientId
+credential.https://git.example.com.oauthRedirectUri
 ```
 
-The `client_secret` is stored securely in the OS keyring (DBUS Secret Service on
-Linux, Keychain on macOS, Windows Credential Manager on Windows) under the service
-name `git-credential-oauth-generic` with the resource URL as the account name.
+If the callback port changes (see `--port`), the redirect URI no longer matches and
+a new client is registered. A `client_id` set by hand has no redirect URI and is
+never replaced.
+
+The `client_secret`, if the server issues one, is stored securely in the OS keyring
+(DBUS Secret Service on Linux, Keychain on macOS, Windows Credential Manager on
+Windows) under the service name `git-credential-oauth-generic` with
+`client:<client_id>:client_secret` as the account name. Secrets stored by earlier
+versions under the resource URL are still read.
+
+Without a usable OS keyring, a client that has no secret works normally. A client
+that does have one can't be saved, so it is registered again on the next run.
 
 Access tokens and refresh tokens are also stored in the OS keyring by default
 but may be optionally stored by the chained storage helper by adding the

@@ -87,15 +87,18 @@ const gitRefreshToken = "git-rt"
 // authorization server, so a request for host=<its host> discovers itself.
 // It counts every request it receives, and token endpoint requests
 // separately. Its token endpoint only accepts refreshes of gitRefreshToken.
-func newAuthServer(t *testing.T) (srv *httptest.Server, hits, tokenHits *int) {
+func newAuthServer(t *testing.T) (srv *httptest.Server, hits, tokenHits, registrations *int) {
 	t.Helper()
 	var mu sync.Mutex
-	hits, tokenHits = new(int), new(int)
+	hits, tokenHits, registrations = new(int), new(int), new(int)
 	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		*hits++
-		if r.URL.Path == "/token" {
+		switch r.URL.Path {
+		case "/token":
 			*tokenHits++
+		case "/register":
+			*registrations++
 		}
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
@@ -126,7 +129,7 @@ func newAuthServer(t *testing.T) (srv *httptest.Server, hits, tokenHits *int) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv, hits, tokenHits
+	return srv, hits, tokenHits, registrations
 }
 
 // fixture is one run's environment plus the fakes behind it.
@@ -134,20 +137,22 @@ type fixture struct {
 	srv       *httptest.Server
 	hits      *int
 	tokenHits *int
-	stdout    string // the last run's stdout
-	host      string // the server's host, as Git would send it
-	resource  string // its Resource URL
-	cache     *memCache
-	clients   *memRegistry
-	authz     *fakeAuthorizer
+	// registrations counts dynamic client registrations.
+	registrations *int
+	stdout        string // the last run's stdout
+	host          string // the server's host, as Git would send it
+	resource      string // its Resource URL
+	cache         *memCache
+	clients       *memRegistry
+	authz         *fakeAuthorizer
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	srv, hits, tokenHits := newAuthServer(t)
+	srv, hits, tokenHits, registrations := newAuthServer(t)
 	host := strings.TrimPrefix(srv.URL, "https://")
 	return &fixture{
-		srv: srv, hits: hits, tokenHits: tokenHits, host: host, resource: "https://" + host,
+		srv: srv, hits: hits, tokenHits: tokenHits, registrations: registrations, host: host, resource: "https://" + host,
 		cache: newMemCache(), clients: newMemRegistry(), authz: &fakeAuthorizer{},
 	}
 }

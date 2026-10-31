@@ -154,8 +154,10 @@ func (c *fakeCache) Erase(_ context.Context, resourceURL string) {
 
 // fakeRegistry is an in-memory ClientRegistry.
 type fakeRegistry struct {
-	mu      sync.Mutex
-	clients map[string]Client
+	mu          sync.Mutex
+	clients     map[string]Client
+	lookupErr   error
+	rememberErr error
 }
 
 func newFakeRegistry() *fakeRegistry { return &fakeRegistry{clients: map[string]Client{}} }
@@ -163,12 +165,18 @@ func newFakeRegistry() *fakeRegistry { return &fakeRegistry{clients: map[string]
 func (r *fakeRegistry) Lookup(_ context.Context, resourceURL string) (Client, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.lookupErr != nil {
+		return Client{}, r.lookupErr
+	}
 	return r.clients[resourceURL], nil
 }
 
 func (r *fakeRegistry) Remember(_ context.Context, resourceURL string, client Client) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.rememberErr != nil {
+		return r.rememberErr
+	}
 	r.clients[resourceURL] = client
 	return nil
 }
@@ -194,6 +202,7 @@ func validToken(access string) *oauth2.Token {
 
 func TestAcquire(t *testing.T) {
 	loginFailed := errors.New("user closed the browser")
+	registryUnreadable := errors.New("git config unreadable")
 
 	tests := []struct {
 		name string
@@ -203,6 +212,7 @@ func TestAcquire(t *testing.T) {
 		wantAccess  string
 		wantErr     error // matched with errors.Is; nil means success
 		wantErrText string
+		wantWarn    string // substring of a warning that must be logged
 		check       func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, resourceURL string)
 	}{
 		{
@@ -276,7 +286,7 @@ func TestAcquire(t *testing.T) {
 			},
 			wantAccess: "login-at",
 			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
-				want := Client{ID: "registered-id", Secret: "registered-secret"}
+				want := Client{ID: "registered-id", Secret: "registered-secret", RedirectURI: "http://localhost:8400/callback"}
 				if got := reg.clients[res]; got != want {
 					t.Errorf("registry holds %+v, want %+v", got, want)
 				}
@@ -332,6 +342,71 @@ func TestAcquire(t *testing.T) {
 			},
 		},
 		{
+			name: "unreadable client registry stops without registering",
+			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				reg.lookupErr = registryUnreadable
+			},
+			wantErr: registryUnreadable,
+			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				if as.hits("/register") != 0 || auth.calls != 0 {
+					t.Errorf("registered %d times and signed in %d times after a lookup error, want 0 and 0", as.hits("/register"), auth.calls)
+				}
+			},
+		},
+		{
+			name: "changed redirect URI registers a new client",
+			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				reg.clients[res] = Client{ID: "old-id", RedirectURI: "http://localhost:9999/callback"}
+				auth.token = validToken("login-at")
+			},
+			wantAccess: "login-at",
+			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				if as.hits("/register") != 1 || auth.cfg.ClientID != "registered-id" {
+					t.Errorf("registrations=%d, signed in as %q; want 1 and registered-id", as.hits("/register"), auth.cfg.ClientID)
+				}
+				if got := reg.clients[res].RedirectURI; got != "http://localhost:8400/callback" {
+					t.Errorf("remembered redirect URI %q, want the current one", got)
+				}
+			},
+		},
+		{
+			name: "client without a recorded redirect URI is never replaced",
+			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				reg.clients[res] = Client{ID: "by-hand"}
+				auth.token = validToken("login-at")
+			},
+			wantAccess: "login-at",
+			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				if as.hits("/register") != 0 || auth.cfg.ClientID != "by-hand" {
+					t.Errorf("registrations=%d, signed in as %q; want 0 and by-hand", as.hits("/register"), auth.cfg.ClientID)
+				}
+			},
+		},
+		{
+			name: "changed redirect URI without a registration endpoint keeps the client and warns",
+			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				as.noRegistration = true
+				reg.clients[res] = Client{ID: "old-id", RedirectURI: "http://localhost:9999/callback"}
+				auth.token = validToken("login-at")
+			},
+			wantAccess: "login-at",
+			wantWarn:   "different redirect URI",
+			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				if auth.cfg.ClientID != "old-id" {
+					t.Errorf("signed in as %q, want old-id", auth.cfg.ClientID)
+				}
+			},
+		},
+		{
+			name: "failure to remember a new client warns and still signs in",
+			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
+				reg.rememberErr = errors.New("no keyring")
+				auth.token = validToken("login-at")
+			},
+			wantAccess: "login-at",
+			wantWarn:   "could not save registered client",
+		},
+		{
 			name: "failed save warns and still returns the token",
 			setup: func(as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
 				reg.clients[res] = Client{ID: "known-id"}
@@ -376,6 +451,9 @@ func TestAcquire(t *testing.T) {
 				}
 			}
 
+			if tt.wantWarn != "" && !strings.Contains(logs.String(), tt.wantWarn) {
+				t.Errorf("expected a warning containing %q, got logs: %q", tt.wantWarn, logs.String())
+			}
 			if cache.saveErr != nil && !strings.Contains(logs.String(), "could not save tokens") {
 				t.Errorf("expected a save warning, got logs: %q", logs.String())
 			}

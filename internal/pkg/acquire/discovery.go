@@ -105,7 +105,7 @@ func (a *Acquirer) register(ctx context.Context, registrationEndpoint string) (C
 	if result.ClientID == "" {
 		return Client{}, fmt.Errorf("registration response missing client_id")
 	}
-	return Client{ID: result.ClientID, Secret: result.ClientSecret}, nil
+	return Client{ID: result.ClientID, Secret: result.ClientSecret, RedirectURI: a.redirectURL()}, nil
 }
 
 // fetchJSON fetches a URL and decodes the JSON response into dst.
