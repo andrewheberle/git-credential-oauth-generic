@@ -153,8 +153,8 @@ func TestDiscovery(t *testing.T) {
 				if token == nil || token.AccessToken != "login-at" {
 					t.Fatalf("Acquire token = %+v, want the signed-in token", token)
 				}
-				if !strings.HasPrefix(auth.cfg.Endpoint.AuthURL, srv.URL) {
-					t.Errorf("signed in against %q, want the discovered endpoint", auth.cfg.Endpoint.AuthURL)
+				if !strings.HasPrefix(auth.req.AuthorizationEndpoint, srv.URL) {
+					t.Errorf("signed in against %q, want the discovered endpoint", auth.req.AuthorizationEndpoint)
 				}
 				return
 			}

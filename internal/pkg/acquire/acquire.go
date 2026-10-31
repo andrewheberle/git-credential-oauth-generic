@@ -64,11 +64,26 @@ type ClientRegistry interface {
 	Remember(ctx context.Context, resourceURL string, client Client) error
 }
 
-// Authorize is the Authorizer: it obtains a token interactively for the given
-// OAuth configuration, passing resourceURL as the RFC 8707 resource parameter.
-// The context carries the HTTP client to use for the code exchange (see
-// oauth2.HTTPClient).
-type Authorize func(ctx context.Context, cfg oauth2.Config, resourceURL string) (*oauth2.Token, error)
+// AuthorizationRequest is what the Authorizer needs to send the user to the
+// authorization server and receive the redirect: everything for the PKCE
+// authorization URL, and nothing about the token endpoint.
+type AuthorizationRequest struct {
+	AuthorizationEndpoint string
+	ClientID              string
+	RedirectURI           string
+	Scopes                []string
+
+	// Resource is the Resource URL, sent as the RFC 8707 resource parameter.
+	Resource string
+}
+
+// Exchange trades an authorization code and the PKCE verifier it was
+// requested with for a token at the token endpoint.
+type Exchange func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
+
+// Authorize is the Authorizer: it obtains a token interactively for req,
+// calling exchange once it has an authorization code.
+type Authorize func(ctx context.Context, req AuthorizationRequest, exchange Exchange) (*oauth2.Token, error)
 
 // Config holds the dependencies of an Acquirer.
 type Config struct {
@@ -124,7 +139,10 @@ func New(cfg Config) *Acquirer {
 //     ErrNotOAuthHost if the host does not support it, or ErrDiscovery if
 //     discovery fails;
 //  3. refreshes the cached refresh token, if there is one and a Registered
-//     client to refresh it with, erasing the cache entry if that fails;
+//     client to refresh it with. If the server rejects it, the cache entry is
+//     erased and acquisition continues; if the token endpoint can't be used
+//     (network, timeout, server error), the entry is kept and the error
+//     returned, so the next run tries again;
 //  4. registers a client (RFC 7591) if none is registered, returning
 //     ErrClientIDRequired if the server does not support registration;
 //  5. runs the Authorizer.
@@ -153,21 +171,24 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 		"scopes", meta.ScopesSupported,
 	)
 
-	// Token requests made by the oauth2 package use our HTTP client.
-	ctx = context.WithValue(ctx, oauth2.HTTPClient, a.httpClient)
-
 	client, err := a.clients.Lookup(ctx, resourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("looking up registered client: %w", err)
 	}
 
 	if cached != nil && cached.RefreshToken != "" && client.ID != "" {
-		token, err := a.refresh(ctx, meta, client, cached.RefreshToken)
+		a.logger.Debug("attempting token refresh")
+		token, err := a.tokenEndpoint(meta, client, resourceURL).refresh(ctx, cached.RefreshToken)
 		if err == nil {
 			a.save(ctx, resourceURL, token)
 			return token, nil
 		}
-		a.logger.Debug("token refresh failed", "error", err)
+		var rejected *tokenRejectedError
+		if !errors.As(err, &rejected) {
+			// Keep the refresh token; the next run tries again.
+			return nil, fmt.Errorf("refreshing access token: %w", err)
+		}
+		a.logger.Debug("refresh token rejected", "error", err)
 		// Clear the stale entry and fall through to the full flow.
 		a.cache.Erase(ctx, resourceURL)
 	}
@@ -177,7 +198,7 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 			return nil, ErrClientIDRequired
 		}
 		a.logger.Debug("registering client", "endpoint", meta.RegistrationEndpoint)
-		client, err = a.register(ctx, meta.RegistrationEndpoint)
+		client, err = a.register(ctx, meta)
 		if err != nil {
 			return nil, fmt.Errorf("dynamic client registration: %w", err)
 		}
@@ -189,17 +210,13 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 		a.logger.Debug("using registered client", "client_id", client.ID)
 	}
 
-	token, err := a.authorize(ctx, oauth2.Config{
-		ClientID:     client.ID,
-		ClientSecret: client.Secret,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:   meta.AuthorizationEndpoint,
-			TokenURL:  meta.TokenEndpoint,
-			AuthStyle: oauth2.AuthStyleInHeader,
-		},
-		RedirectURL: a.redirectURL(),
-		Scopes:      meta.ScopesSupported,
-	}, resourceURL)
+	token, err := a.authorize(ctx, AuthorizationRequest{
+		AuthorizationEndpoint: meta.AuthorizationEndpoint,
+		ClientID:              client.ID,
+		RedirectURI:           a.redirectURL(),
+		Scopes:                meta.ScopesSupported,
+		Resource:              resourceURL,
+	}, a.tokenEndpoint(meta, client, resourceURL).exchange)
 	if err != nil {
 		return nil, fmt.Errorf("authentication: %w", err)
 	}
@@ -228,20 +245,6 @@ func (a *Acquirer) needsRegistration(client Client, meta *authServerMetadata) bo
 	a.logger.Debug("callback redirect URI changed; registering a new client",
 		"registered", client.RedirectURI, "current", a.redirectURL())
 	return true
-}
-
-// refresh exchanges refreshToken for a new token at the token endpoint.
-func (a *Acquirer) refresh(ctx context.Context, meta *authServerMetadata, client Client, refreshToken string) (*oauth2.Token, error) {
-	a.logger.Debug("attempting token refresh")
-	cfg := oauth2.Config{
-		ClientID:     client.ID,
-		ClientSecret: client.Secret,
-		Endpoint: oauth2.Endpoint{
-			TokenURL:  meta.TokenEndpoint,
-			AuthStyle: oauth2.AuthStyleInHeader,
-		},
-	}
-	return cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
 }
 
 // save stores token in the Token cache, warning on failure.

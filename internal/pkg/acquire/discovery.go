@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -28,6 +29,8 @@ type authServerMetadata struct {
 	RegistrationEndpoint          string   `json:"registration_endpoint"`
 	ScopesSupported               []string `json:"scopes_supported"`
 	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
+
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 }
 
 // dynamicClientResponse is the RFC 7591 registration response.
@@ -140,13 +143,21 @@ func sameURL(a, b string) bool {
 }
 
 // register performs RFC 7591 dynamic client registration, requesting the
-// localhost redirect URI on the callback port.
-func (a *Acquirer) register(ctx context.Context, registrationEndpoint string) (Client, error) {
-	body, err := json.Marshal(map[string]any{
+// localhost redirect URI on the callback port. When the server supports
+// public clients, it asks to be one: a command-line helper is a native app
+// (RFC 8252), whose secret couldn't be kept confidential anyway, and a public
+// client needs nothing in the OS keyring.
+func (a *Acquirer) register(ctx context.Context, meta *authServerMetadata) (Client, error) {
+	registrationEndpoint := meta.RegistrationEndpoint
+	request := map[string]any{
 		"redirect_uris": []string{a.redirectURL()},
 		"client_name":   "git-credential-oauth-generic",
 		"grant_types":   []string{"authorization_code", "refresh_token"},
-	})
+	}
+	if slices.Contains(meta.TokenEndpointAuthMethodsSupported, authNone) {
+		request["token_endpoint_auth_method"] = authNone
+	}
+	body, err := json.Marshal(request)
 	if err != nil {
 		return Client{}, fmt.Errorf("encoding registration request: %w", err)
 	}

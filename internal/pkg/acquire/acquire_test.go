@@ -186,13 +186,22 @@ type fakeAuthorizer struct {
 	token *oauth2.Token
 	err   error
 
+	// code, if set, is traded with the exchange function Acquire passes in,
+	// as the real Authorizer does once the browser returns, instead of
+	// returning token.
+	code     string
+	verifier string
+
 	calls int
-	cfg   oauth2.Config
+	req   AuthorizationRequest
 }
 
-func (f *fakeAuthorizer) authorize(_ context.Context, cfg oauth2.Config, _ string) (*oauth2.Token, error) {
+func (f *fakeAuthorizer) authorize(ctx context.Context, req AuthorizationRequest, exchange Exchange) (*oauth2.Token, error) {
 	f.calls++
-	f.cfg = cfg
+	f.req = req
+	if f.code != "" {
+		return exchange(ctx, f.code, f.verifier)
+	}
 	return f.token, f.err
 }
 
@@ -294,18 +303,21 @@ func TestAcquire(t *testing.T) {
 				if as.registerRedirect != wantRedirect {
 					t.Errorf("registered redirect URI %q, want %q", as.registerRedirect, wantRedirect)
 				}
-				cfg := auth.cfg
-				if cfg.ClientID != want.ID || cfg.ClientSecret != want.Secret {
-					t.Errorf("authorizer got client %q/%q, want %q/%q", cfg.ClientID, cfg.ClientSecret, want.ID, want.Secret)
+				req := auth.req
+				if req.ClientID != want.ID {
+					t.Errorf("authorizer got client %q, want %q", req.ClientID, want.ID)
 				}
-				if cfg.RedirectURL != wantRedirect {
-					t.Errorf("authorizer got redirect %q, want %q", cfg.RedirectURL, wantRedirect)
+				if req.RedirectURI != wantRedirect {
+					t.Errorf("authorizer got redirect %q, want %q", req.RedirectURI, wantRedirect)
 				}
-				if cfg.Endpoint.AuthURL != as.URL+"/authorize" || cfg.Endpoint.TokenURL != as.URL+"/token" {
-					t.Errorf("authorizer got endpoints %+v", cfg.Endpoint)
+				if req.AuthorizationEndpoint != as.URL+"/authorize" {
+					t.Errorf("authorizer got authorization endpoint %q", req.AuthorizationEndpoint)
 				}
-				if len(cfg.Scopes) != 1 || cfg.Scopes[0] != "git" {
-					t.Errorf("authorizer got scopes %v, want [git]", cfg.Scopes)
+				if req.Resource != res {
+					t.Errorf("authorizer got resource %q, want %q", req.Resource, res)
+				}
+				if len(req.Scopes) != 1 || req.Scopes[0] != "git" {
+					t.Errorf("authorizer got scopes %v, want [git]", req.Scopes)
 				}
 			},
 		},
@@ -361,8 +373,8 @@ func TestAcquire(t *testing.T) {
 			},
 			wantAccess: "login-at",
 			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
-				if as.hits("/register") != 1 || auth.cfg.ClientID != "registered-id" {
-					t.Errorf("registrations=%d, signed in as %q; want 1 and registered-id", as.hits("/register"), auth.cfg.ClientID)
+				if as.hits("/register") != 1 || auth.req.ClientID != "registered-id" {
+					t.Errorf("registrations=%d, signed in as %q; want 1 and registered-id", as.hits("/register"), auth.req.ClientID)
 				}
 				if got := reg.clients[res].RedirectURI; got != "http://localhost:8400/callback" {
 					t.Errorf("remembered redirect URI %q, want the current one", got)
@@ -377,8 +389,8 @@ func TestAcquire(t *testing.T) {
 			},
 			wantAccess: "login-at",
 			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
-				if as.hits("/register") != 0 || auth.cfg.ClientID != "by-hand" {
-					t.Errorf("registrations=%d, signed in as %q; want 0 and by-hand", as.hits("/register"), auth.cfg.ClientID)
+				if as.hits("/register") != 0 || auth.req.ClientID != "by-hand" {
+					t.Errorf("registrations=%d, signed in as %q; want 0 and by-hand", as.hits("/register"), auth.req.ClientID)
 				}
 			},
 		},
@@ -392,8 +404,8 @@ func TestAcquire(t *testing.T) {
 			wantAccess: "login-at",
 			wantWarn:   "different redirect URI",
 			check: func(t *testing.T, as *fakeAS, cache *fakeCache, reg *fakeRegistry, auth *fakeAuthorizer, res string) {
-				if auth.cfg.ClientID != "old-id" {
-					t.Errorf("signed in as %q, want old-id", auth.cfg.ClientID)
+				if auth.req.ClientID != "old-id" {
+					t.Errorf("signed in as %q, want old-id", auth.req.ClientID)
 				}
 			},
 		},
