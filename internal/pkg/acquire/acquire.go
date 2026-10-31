@@ -135,7 +135,9 @@ func New(cfg Config) *Acquirer {
 // Acquire returns an access token for resourceURL. In order, it:
 //
 //  1. returns a still-valid cached token, without any network requests;
-//  2. discovers the authorization server (RFC 9728, RFC 8414), returning
+//  2. discovers the authorization server (RFC 9728, RFC 8414), starting from
+//     metadataHint (the resource_metadata URL from the host's WWW-Authenticate
+//     challenge, or "") when it is on the resource host, and returning
 //     ErrNotOAuthHost if the host does not support it, or ErrDiscovery if
 //     discovery fails;
 //  3. refreshes the cached refresh token, if there is one and a Registered
@@ -149,7 +151,7 @@ func New(cfg Config) *Acquirer {
 //
 // A newly obtained token is saved to the Token cache; failing to save is
 // logged as a warning and does not fail the call.
-func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Token, error) {
+func (a *Acquirer) Acquire(ctx context.Context, resourceURL, metadataHint string) (*oauth2.Token, error) {
 	cached, err := a.cache.Load(ctx, resourceURL)
 	if err != nil {
 		a.logger.Debug("could not read token cache", "error", err)
@@ -160,7 +162,7 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 		return cached, nil
 	}
 
-	meta, err := a.discover(ctx, resourceURL)
+	meta, err := a.discover(ctx, resourceURL, metadataHint)
 	if err != nil {
 		return nil, err
 	}

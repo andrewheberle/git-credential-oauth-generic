@@ -324,7 +324,7 @@ func TestTokenEndpoint(t *testing.T) {
 			client.Timeout = 250 * time.Millisecond
 			a := New(Config{Cache: cache, Clients: reg, Authorize: auth.authorize, HTTPClient: client, CallbackPort: callbackPort})
 
-			token, err := a.Acquire(context.Background(), res)
+			token, err := a.Acquire(context.Background(), res, "")
 			switch {
 			case tt.wantErr && err == nil:
 				t.Fatalf("Acquire: expected an error, got token %+v", token)

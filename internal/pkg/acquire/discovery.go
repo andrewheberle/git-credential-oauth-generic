@@ -48,30 +48,15 @@ type dynamicClientResponse struct {
 // usually configured for every host. Network errors, timeouts and 5xx there,
 // and any failure once the host has said it is OAuth-protected, are
 // ErrDiscovery.
-func (a *Acquirer) discover(ctx context.Context, resourceURL string) (*authServerMetadata, error) {
+func (a *Acquirer) discover(ctx context.Context, resourceURL, metadataHint string) (*authServerMetadata, error) {
 	u, err := url.Parse(resourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: parsing resource URL: %w", ErrDiscovery, err)
 	}
 
-	// RFC 9728: fetch /.well-known/oauth-protected-resource from the resource host.
-	prMetaURL := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", u.Scheme, u.Host)
-	a.logger.Debug("fetching protected resource metadata", "url", prMetaURL)
-	var prMeta protectedResourceMetadata
-	if err := a.fetchJSON(ctx, prMetaURL, &prMeta); err != nil {
-		if hostIsNotOAuth(err) {
-			return nil, fmt.Errorf("%w: %w", ErrNotOAuthHost, err)
-		}
-		return nil, fmt.Errorf("%w: protected resource metadata: %w", ErrDiscovery, err)
-	}
-	if len(prMeta.AuthorizationServers) == 0 {
-		return nil, fmt.Errorf("%w: no authorization_servers in protected resource metadata", ErrNotOAuthHost)
-	}
-
-	// RFC 9728 §3.3: the metadata must be for this resource. A missing
-	// resource is tolerated; a trailing slash is not a difference.
-	if prMeta.Resource != "" && !sameURL(prMeta.Resource, resourceURL) {
-		return nil, fmt.Errorf("%w: protected resource metadata is for %q, not %q", ErrDiscovery, prMeta.Resource, resourceURL)
+	prMeta, err := a.protectedResource(ctx, u, metadataHint)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use the first authorization server.
@@ -89,6 +74,90 @@ func (a *Acquirer) discover(ctx context.Context, resourceURL string) (*authServe
 	}
 
 	return asMeta, nil
+}
+
+// protectedResource returns the protected resource metadata for resource.
+//
+// If Git passed a resource_metadata hint from the host's WWW-Authenticate
+// challenge (RFC 9728 §5) and it is https on the same host and port, that
+// document is tried first; its resource may be the Resource URL or any path
+// under it, since the hint is issued for the URL Git requested. If the hint
+// shows no OAuth metadata, or there is no usable hint, the well-known
+// document at the root of the host is used, and its resource must be the
+// Resource URL itself.
+func (a *Acquirer) protectedResource(ctx context.Context, resource *url.URL, hint string) (*protectedResourceMetadata, error) {
+	resourceURL := resource.String()
+
+	if hint != "" {
+		if !sameOrigin(resource, hint) {
+			a.logger.Debug("ignoring resource_metadata hint: not https on the resource host", "hint", hint)
+		} else {
+			meta, err := a.fetchProtectedResource(ctx, hint)
+			switch {
+			case err == nil:
+				if meta.Resource != "" && !sameURL(meta.Resource, resourceURL) && !underURL(meta.Resource, resourceURL) {
+					return nil, fmt.Errorf("%w: hinted protected resource metadata is for %q, not under %q", ErrDiscovery, meta.Resource, resourceURL)
+				}
+				return meta, nil
+			case errors.Is(err, ErrNotOAuthHost):
+				a.logger.Debug("resource_metadata hint has no usable metadata; trying the well-known document", "hint", hint, "error", err)
+			default:
+				return nil, err
+			}
+		}
+	}
+
+	// RFC 9728: /.well-known/oauth-protected-resource at the resource host.
+	meta, err := a.fetchProtectedResource(ctx, fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource", resource.Scheme, resource.Host))
+	if err != nil {
+		return nil, err
+	}
+	// RFC 9728 §3.3: the metadata must be for this resource. A missing
+	// resource is tolerated; a trailing slash is not a difference.
+	if meta.Resource != "" && !sameURL(meta.Resource, resourceURL) {
+		return nil, fmt.Errorf("%w: protected resource metadata is for %q, not %q", ErrDiscovery, meta.Resource, resourceURL)
+	}
+	return meta, nil
+}
+
+// fetchProtectedResource fetches protected resource metadata from metaURL.
+// A 4xx, a response that isn't JSON, or metadata naming no authorization
+// server is ErrNotOAuthHost; any other failure is ErrDiscovery.
+func (a *Acquirer) fetchProtectedResource(ctx context.Context, metaURL string) (*protectedResourceMetadata, error) {
+	a.logger.Debug("fetching protected resource metadata", "url", metaURL)
+	var meta protectedResourceMetadata
+	if err := a.fetchJSON(ctx, metaURL, &meta); err != nil {
+		if hostIsNotOAuth(err) {
+			return nil, fmt.Errorf("%w: %w", ErrNotOAuthHost, err)
+		}
+		return nil, fmt.Errorf("%w: protected resource metadata: %w", ErrDiscovery, err)
+	}
+	if len(meta.AuthorizationServers) == 0 {
+		return nil, fmt.Errorf("%w: no authorization_servers in protected resource metadata", ErrNotOAuthHost)
+	}
+	return &meta, nil
+}
+
+// sameOrigin reports whether rawURL is https on the same host and port as
+// resource (RFC 9728 §7: a hint must not steer discovery elsewhere).
+func sameOrigin(resource *url.URL, rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme != "https" || resource.Scheme != "https" {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), resource.Hostname()) && portOrDefault(u) == portOrDefault(resource)
+}
+
+func portOrDefault(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	return "443"
+}
+
+// underURL reports whether candidate is a path under base.
+func underURL(candidate, base string) bool {
+	return strings.HasPrefix(candidate, strings.TrimSuffix(base, "/")+"/")
 }
 
 // authServerMetadata fetches the RFC 8414 metadata for issuer. The well-known
