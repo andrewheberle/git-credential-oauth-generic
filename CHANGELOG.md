@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/andrewheberle/git-credential-oauth-generic/compare/v0.5.0...v0.5.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **release:** handle immutable release process ([#63](https://github.com/andrewheberle/git-credential-oauth-generic/issues/63)) ([849c17c](https://github.com/andrewheberle/git-credential-oauth-generic/commit/849c17cc5b58c26eaeadb842efaaaedfadf03b3e))
+
 ## [0.5.0](https://github.com/andrewheberle/git-credential-oauth-generic/compare/v0.4.1...v0.5.0) (2026-10-31)
 
 
