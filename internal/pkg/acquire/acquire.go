@@ -21,6 +21,13 @@ var (
 	// fall through to the next credential helper.
 	ErrNotOAuthHost = errors.New("host does not advertise OAuth protected resource metadata")
 
+	// ErrDiscovery means the host is OAuth-protected (or could not be
+	// reached to find out) but its authorization server could not be
+	// discovered: a network error, timeout or server error, metadata that
+	// can't be read, or metadata for a different resource or issuer. Unlike
+	// ErrNotOAuthHost it should be reported to the user.
+	ErrDiscovery = errors.New("OAuth discovery failed")
+
 	// ErrClientIDRequired means no client is registered for the resource and
 	// the authorization server offers no dynamic client registration, so a
 	// client ID must be configured by hand.
@@ -114,7 +121,8 @@ func New(cfg Config) *Acquirer {
 //
 //  1. returns a still-valid cached token, without any network requests;
 //  2. discovers the authorization server (RFC 9728, RFC 8414), returning
-//     ErrNotOAuthHost if the host does not support it;
+//     ErrNotOAuthHost if the host does not support it, or ErrDiscovery if
+//     discovery fails;
 //  3. refreshes the cached refresh token, if there is one and a Registered
 //     client to refresh it with, erasing the cache entry if that fails;
 //  4. registers a client (RFC 7591) if none is registered, returning
@@ -136,7 +144,7 @@ func (a *Acquirer) Acquire(ctx context.Context, resourceURL string) (*oauth2.Tok
 
 	meta, err := a.discover(ctx, resourceURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrNotOAuthHost, err)
+		return nil, err
 	}
 	a.logger.Debug("discovery completed",
 		"authz", meta.AuthorizationEndpoint,
