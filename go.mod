@@ -7,7 +7,7 @@ require (
 	github.com/andrewheberle/simplecommand v0.8.0
 	github.com/bep/simplecobra v0.8.0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 )
 
 require (
